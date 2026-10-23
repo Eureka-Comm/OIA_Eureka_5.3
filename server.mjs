@@ -4,9 +4,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import worker from "./worker/index.js";
+import { createApiKeyStore } from "./worker/api-keys.js";
 
 const port = Number(process.env.PORT || 3000);
-const dataFile = resolve(process.env.EUREKA_DATA_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "runtime-data"), "applications.json");
+const dataDirectory = resolve(process.env.EUREKA_DATA_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "runtime-data"));
+const dataFile = resolve(dataDirectory, "applications.json");
+const apiKeyStore = createApiKeyStore(dataDirectory);
 let writeQueue = Promise.resolve();
 async function readStore() {
   try { return JSON.parse(await readFile(dataFile, "utf8")); }
@@ -66,6 +69,8 @@ const env = {
   EM_FACTORY_MCP_URL: process.env.EM_FACTORY_MCP_URL,
   EM_FACTORY_OAUTH_TOKEN: process.env.EM_FACTORY_OAUTH_TOKEN,
   MATH_ENGINE_URL: process.env.MATH_ENGINE_URL,
+  EUREKA_API_CORS_ORIGINS: process.env.EUREKA_API_CORS_ORIGINS,
+  apiKeyStore,
   appStore,
 };
 

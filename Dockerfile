@@ -5,6 +5,7 @@ COPY package.json ./
 COPY server.mjs ./
 COPY worker ./worker
 COPY runtime ./runtime
+COPY scripts ./scripts
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 3000

@@ -1,7 +1,15 @@
 {$DOMAIN} {
   encode zstd gzip
-  basic_auth {
-    {$SITE_USER} {$SITE_PASSWORD_HASH}
+
+  @eureka_api path /api/v1/*
+  handle @eureka_api {
+    reverse_proxy app:3000
   }
-  reverse_proxy app:3000
+
+  handle {
+    basic_auth {
+      {$SITE_USER} {$SITE_PASSWORD_HASH}
+    }
+    reverse_proxy app:3000
+  }
 }

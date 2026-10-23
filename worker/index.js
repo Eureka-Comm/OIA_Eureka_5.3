@@ -93,7 +93,25 @@ composer.addEventListener('submit',submitMessage);document.getElementById('attac
 </script>
 </body>
 </html>`;
-function json(data, status = 200) { return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "same-origin" } }); }
+function json(data, status = 200, extraHeaders = {}) { return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extraHeaders } }); }
+function allowedOrigins(env) { return new Set((env.EUREKA_API_CORS_ORIGINS || "").split(",").map(origin => origin.trim()).filter(Boolean)); }
+function apiJson(data, status, request, env) {
+  const origin = request.headers.get("origin");
+  const headers = origin && allowedOrigins(env).has(origin) ? { "access-control-allow-origin": origin, "access-control-expose-headers": "www-authenticate", vary: "Origin" } : {};
+  return json(data, status, headers);
+}
+function bearerToken(request) {
+  const header = request.headers.get("authorization") || "";
+  const match = header.match(/^Bearer\s+(\S+)$/i);
+  return match?.[1] || "";
+}
+async function authorizeApi(request, env, scope) {
+  if (!env.apiKeyStore?.verify) return { ok: false, status: 503, error: "El registro de claves de Eureka no está disponible." };
+  const result = await env.apiKeyStore.verify(bearerToken(request), scope);
+  if (result.ok) return result;
+  if (result.reason === "scope") return { ok: false, status: 403, error: `La clave no tiene el permiso ${scope}.` };
+  return { ok: false, status: 401, error: "Falta una API key Eureka válida en Authorization: Bearer <api_key>." };
+}
 function encodeBase64(bytes) { let binary = ""; for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length))); return btoa(binary); }
 const imageTypes = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 const mediaTypes = { pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ppt: "application/vnd.ms-powerpoint", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", csv: "text/csv", tsv: "text/tsv", txt: "text/plain", md: "text/markdown", json: "application/json", html: "text/html", xml: "text/xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
@@ -129,36 +147,48 @@ async function chat(request, env) {
 }
 export default { async fetch(request, env) {
   const url = new URL(request.url);
+  if (request.method === "OPTIONS" && url.pathname.startsWith("/api/v1/")) {
+    const origin = request.headers.get("origin");
+    if (origin && !allowedOrigins(env).has(origin)) return new Response(null, { status: 403, headers: { "vary": "Origin" } });
+    const headers = { "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "authorization,content-type", "access-control-max-age": "86400", vary: "Origin" };
+    if (origin) headers["access-control-allow-origin"] = origin;
+    return new Response(null, { status: 204, headers });
+  }
   if (request.method === "OPTIONS") return new Response(null, { headers: { "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400" } });
+  if (url.pathname.startsWith("/api/v1/")) {
+    const scope = request.method === "GET" ? "eureka:read" : "eureka:invoke";
+    const auth = await authorizeApi(request, env, scope);
+    if (!auth.ok) return apiJson({ error: auth.error }, auth.status, request, env);
+  }
   if (url.pathname === "/api/status" && request.method === "GET") {
     const eurekaRuntime = await readEurekaCapabilities(env);
     return json({ eurekaRuntimeConnected: eurekaRuntime.connected, eurekaRuntimeReason: eurekaRuntime.reason, eurekaCapabilities: eurekaRuntime.capabilities.map(({ id, status, version }) => ({ id, status, version })), factoryConfigured: Boolean(env.EM_FACTORY_MCP_URL && env.EM_FACTORY_OAUTH_TOKEN), mathEngineConfigured: Boolean(env.MATH_ENGINE_URL), applicationRenderer: true });
   }
   if (url.pathname === "/api/v1/eureka/capabilities" && request.method === "GET") {
     const result = await readEurekaCapabilities(env);
-    return json(result, result.connected ? 200 : 503);
+    return apiJson(result, result.connected ? 200 : 503, request, env);
   }
   if (url.pathname === "/api/v1/eureka/invocations" && request.method === "POST") {
-    let body; try { body = await request.clone().json(); } catch { return json({ error: "Se esperaba un cuerpo JSON." }, 400); }
-    if (body.agent !== "core") return json({ error: "La interfaz envía intenciones a EM Core; solo Core decide qué especialistas convocar." }, 403);
+    let body; try { body = await request.clone().json(); } catch { return apiJson({ error: "Se esperaba un cuerpo JSON." }, 400, request, env); }
+    if (body.agent !== "core") return apiJson({ error: "La interfaz envía intenciones a EM Core; solo Core decide qué especialistas convocar." }, 403, request, env);
     const result = await invokeEurekaAgent(request, env);
-    return json(result.body, result.status);
+    return apiJson(result.body, result.status, request, env);
   }
   if (url.pathname === "/api/v1/tasks" && request.method === "POST") {
     const result = await createEurekaTask(request, env);
-    return json(result.body, result.status);
+    return apiJson(result.body, result.status, request, env);
   }
   const taskMatch = url.pathname.match(/^\/api\/v1\/tasks\/([A-Za-z0-9_-]{1,128})(?:\/(events|messages))?$/);
   if (taskMatch && request.method === "GET") {
     const result = await requestEurekaTask(taskMatch[1], env, taskMatch[2] ? url.searchParams.get("after") || 0 : null);
-    return json(result.body, result.status);
+    return apiJson(result.body, result.status, request, env);
   }
   if (taskMatch && taskMatch[2] === "messages" && request.method === "POST") {
-    let body; try { body = await request.json(); } catch { return json({ error: "Se esperaba un cuerpo JSON." }, 400); }
-    if (typeof body.task !== "string" || !body.task.trim()) return json({ error: "El campo task es obligatorio." }, 400);
+    let body; try { body = await request.json(); } catch { return apiJson({ error: "Se esperaba un cuerpo JSON." }, 400, request, env); }
+    if (typeof body.task !== "string" || !body.task.trim()) return apiJson({ error: "El campo task es obligatorio." }, 400, request, env);
     const invocation = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, agent: "core", taskId: taskMatch[1] }) });
     const result = await invokeEurekaAgent(invocation, env);
-    return json(result.body, result.status);
+    return apiJson(result.body, result.status, request, env);
   }
   const artifactMatch = url.pathname.match(/^\/api\/artifacts\/(artifact_[a-f0-9-]{36})(?:\/(integrate))?$/);
   if (artifactMatch && request.method === "GET" && !artifactMatch[2]) {
@@ -180,6 +210,7 @@ export default { async fetch(request, env) {
     return new Response(renderApplicationPage(artifact), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; frame-ancestors 'self'" } });
   }
   if (url.pathname === "/api/chat" && request.method === "POST") return chat(request, env);
+  if (url.pathname.startsWith("/api/v1/")) return apiJson({ error: "Ruta API no encontrada." }, 404, request, env);
   if (url.pathname.startsWith("/api/")) return json({ error: "Ruta API no encontrada." }, 404);
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" } });
 } };

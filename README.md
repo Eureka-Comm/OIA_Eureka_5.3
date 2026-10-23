@@ -7,6 +7,7 @@ Interfaz privada para conversar con el runtime de agentes de Eureka Multiverse. 
 - El objetivo cognitivo y sus pendientes están definidos en `contracts/v0.1/arquitectura-cognitiva-eureka-multiverse-5-3.md`; la secuencia de trabajo está en el roadmap del workspace.
 - La interfaz persiste conversaciones y eventos básicos por tarea. Aún no expone el modelo completo de formulación revisable, gates, capa semántica compartida ni paneles de gobierno de Eureka-0.
 - El puente HTTP y un servicio privado están implementados en `worker/eureka-runtime.js` y `runtime/server.mjs`. El runtime carga las Skills fuente `eureka-multiverse-5-3@5.3.2` desde `runtime/skills/`, deja que EM Core determine respuesta directa o routing con dependencias, ejecuta los roles seleccionados y devuelve la síntesis a Core.
+- La API pública de Eureka está protegida con claves Bearer separadas del token interno app↔runtime. Se crean, listan y revocan en el VPS con `docker compose exec app node scripts/eureka-api-keys.mjs ...`; el servidor guarda solo hashes.
 - Los adjuntos se pueden enviar con cualquier extensión; el runtime conectado determina cuáles puede interpretar.
 - El chat requiere que el runtime confirme EM Core como capacidad disponible. No devuelve respuestas simuladas.
 - El runtime de Eureka incluye un adaptador de inferencia para Responses API y Chat Completions. Puede usar un proveedor remoto o Ollama local en Docker. El modelo ejecuta las Skills versionadas; Eureka es el pipeline, no el nombre del proveedor. El modelo aún debe configurarse y descargarse en el VPS. También falta conectar las herramientas MCP de EM Factory y el motor matemático determinista.
@@ -59,6 +60,14 @@ docker compose ps
 ```
 
 Abre `https://<tu-dominio>`. El estado del panel debe confirmar el runtime antes de invocar agentes. Para futuras versiones, ejecuta `git pull` y `docker compose up -d --build`.
+
+Para emitir una API key Eureka después del primer arranque:
+
+```bash
+docker compose exec app node scripts/eureka-api-keys.mjs create "Integración"
+```
+
+Copia la clave que se imprime; se muestra una sola vez. Usa `Authorization: Bearer <api_key>` al llamar `/api/v1/eureka/capabilities` o `/api/v1/eureka/invocations`. Consulta [`runtime/openapi.yaml`](runtime/openapi.yaml) para el contrato.
 
 ## Configuración
 

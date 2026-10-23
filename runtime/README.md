@@ -1,4 +1,4 @@
-# Eureka Runtime API v0.2
+# Eureka Multiverse API v0.3
 
 Servicio privado que expone el runtime para la interfaz de Eureka Multiverse. Se publica solo dentro de la red Docker `runtime_internal`; no tiene puertos publicados en el host. Carga el contenido original de las Skills del paquete instalado `eureka-multiverse-5-3@5.3.2`, versionado bajo `runtime/skills/`.
 
@@ -13,6 +13,25 @@ Servicio privado que expone el runtime para la interfaz de Eureka Multiverse. Se
 - `GET /v1/tasks/{taskId}/events?after={sequence}`: devuelve eventos desde una secuencia dada.
 
 La respuesta contiene `agent: "core"`, `taskId`, `status`, `product.text`, `routedAgents`, `routingReason` y referencias de solicitud del proveedor. El adaptador carga Eureka Multiverse y EM Core junto con las referencias incluidas en sus Skills, acepta el plan adaptativo de Core, carga la Skill versionada de cada especialista delegado y devuelve el resultado a Core para integración. Core puede responder directamente o delegar un grafo de tareas con dependencias; no se impone un orden fijo de agentes. Mensajes y eventos se conservan en `EUREKA_RUNTIME_DATA_FILE` sobre el volumen Docker.
+
+## API keys de Eureka
+
+La API pública `/api/v1/*` usa `Authorization: Bearer <api_key>` y los permisos `eureka:read` y `eureka:invoke`. La interfaz web conserva su autenticación HTTP Basic; el token `EUREKA_RUNTIME_API_TOKEN` sigue siendo exclusivamente para el enlace privado app↔runtime y no sirve como API key externa.
+
+Después de desplegar el servicio, un administrador con acceso al servidor puede crear una clave:
+
+```bash
+docker compose exec app node scripts/eureka-api-keys.mjs create "Integración del chatbot"
+```
+
+El comando muestra el secreto una sola vez. El servidor conserva solo su SHA-256 en `/app/data/api-keys.json`, dentro del volumen persistente. Copia la clave a un gestor seguro o al secreto de la aplicación cliente; no la guardes en GitHub, en `.env.example` ni en código del navegador. Para administrar claves:
+
+```bash
+docker compose exec app node scripts/eureka-api-keys.mjs list
+docker compose exec app node scripts/eureka-api-keys.mjs revoke <key_id>
+```
+
+Configura `EUREKA_API_CORS_ORIGINS` con orígenes exactos separados por comas si una aplicación web en otro dominio necesita llamar a la API; vacío significa que no se permite CORS entre dominios. CORS no sustituye la API key. `/api/v1/*` no solicita HTTP Basic; cada solicitud protegida debe incluir su Bearer token.
 
 ## Proveedor
 

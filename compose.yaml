@@ -9,6 +9,7 @@ services:
     environment:
       PORT: "3000"
       EUREKA_DATA_DIR: /app/data
+      EUREKA_API_CORS_ORIGINS: ${EUREKA_API_CORS_ORIGINS:-}
       EUREKA_RUNTIME_CAPABILITIES_URL: http://runtime:3001/v1/capabilities
       EUREKA_RUNTIME_INVOKE_URL: http://runtime:3001/v1/invocations
       EUREKA_RUNTIME_API_TOKEN: ${EUREKA_RUNTIME_API_TOKEN:?Define EUREKA_RUNTIME_API_TOKEN en .env}

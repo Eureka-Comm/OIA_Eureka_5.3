@@ -1,15 +1,15 @@
 openapi: 3.1.0
 info:
   title: Eureka Multiverse Runtime API
-  version: 0.2.0
-  description: Private HTTP API for the Eureka Multiverse 5.3 skills runtime. EM Core owns routing; specialist Skills preserve their cognitive ownership.
+  version: 0.3.0
+  description: Eureka Multiverse 5.3 HTTP API. EM Core owns routing; specialist Skills preserve their cognitive ownership. Use an API key generated on the server with the Eureka API key CLI.
 servers:
   - url: https://{domain}
     variables:
       domain:
         default: chat.example.com
 security:
-  - siteBasicAuth: []
+  - eurekaApiKey: []
 paths:
   /api/v1/eureka/capabilities:
     get:
@@ -17,6 +17,8 @@ paths:
       responses:
         '200':
           description: Capability registry, including unavailable dependencies.
+        '401':
+          description: A valid Eureka API key is required.
   /api/v1/eureka/invocations:
     post:
       summary: Submit an invocation to EM Core
@@ -35,7 +37,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/CoreResponse'
         '403':
-          description: Direct specialist invocation is not allowed.
+          description: Key scope is insufficient or direct specialist invocation is not allowed.
+        '401':
+          description: A valid Eureka API key is required.
         '503':
           description: Runtime, skill bundle, or model provider unavailable.
   /api/v1/tasks:
@@ -56,6 +60,8 @@ paths:
       responses:
         '201':
           description: Task created with an initial TaskCreated event.
+        '401':
+          description: A valid Eureka API key is required.
         '409':
           description: Task ID already exists.
   /api/v1/tasks/{taskId}:
@@ -66,6 +72,8 @@ paths:
       responses:
         '200':
           description: Eureka task state.
+        '401':
+          description: A valid Eureka API key is required.
         '404':
           description: Task not found.
   /api/v1/tasks/{taskId}/messages:
@@ -82,6 +90,8 @@ paths:
       responses:
         '200':
           description: Core response and persisted task events.
+        '401':
+          description: A valid Eureka API key is required.
         '404':
           description: Task not found.
         '503':
@@ -101,13 +111,16 @@ paths:
       responses:
         '200':
           description: Ordered task events.
+        '401':
+          description: A valid Eureka API key is required.
         '404':
           description: Task not found.
 components:
   securitySchemes:
-    siteBasicAuth:
+    eurekaApiKey:
       type: http
-      scheme: basic
+      scheme: bearer
+      bearerFormat: Eureka API key (euk_live_...)
   parameters:
     taskId:
       name: taskId
