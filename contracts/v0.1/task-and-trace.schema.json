@@ -1,0 +1,1225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eureka.local/schemas/task-v0.1.json",
+  "title": "Eureka task and trace contracts v0.1",
+  "description": "Provisional Phase 0 contracts. Semantic fields preserve provenance and review state but do not define CUT syntax, ACFL/GCLV calculations, or execution behavior.",
+  "$defs": {
+    "agent": {
+      "type": "string",
+      "enum": [
+        "Eureka-0",
+        "EM Core",
+        "EM Structurer",
+        "EM Descriptor",
+        "EM Predictor",
+        "EM Prescriptor",
+        "EM Actioner",
+        "EM Installer",
+        "EM Publisher",
+        "human_operator",
+        "system"
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "task",
+            "formulation",
+            "artifact",
+            "event",
+            "evidence",
+            "external",
+            "legacy_gpt",
+            "skill",
+            "code_reference",
+            "scientific_source",
+            "cut_specification"
+          ]
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentCapability": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "skillRef",
+        "description",
+        "inputKinds",
+        "outputKinds",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "$ref": "#/$defs/agent"
+        },
+        "skillRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Versioned instruction/resource reference available to the server-side runtime."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputKinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "outputKinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "requiredTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "available",
+            "degraded",
+            "disabled"
+          ]
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentInvocation": {
+      "type": "object",
+      "required": [
+        "id",
+        "taskId",
+        "agent",
+        "requestedBy",
+        "reason",
+        "status",
+        "inputRefs",
+        "formulationVersion",
+        "requestedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "parentInvocationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agent": {
+          "$ref": "#/$defs/agent"
+        },
+        "capabilityVersion": {
+          "type": "string"
+        },
+        "requestedBy": {
+          "const": "EM Core"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executionMode": {
+          "type": "string",
+          "enum": [
+            "sequential",
+            "parallel"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "blocked"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "eureka-runtime",
+            "openai-responses",
+            "mcp-adapter"
+          ]
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "formulationVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "outputArtifactRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "modelOrToolVersion": {
+          "type": "string"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failureNote": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "required": [
+        "id",
+        "schemaVersion",
+        "status",
+        "intent",
+        "createdAt",
+        "updatedAt",
+        "createdBy",
+        "currentFormulationVersion"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "schemaVersion": {
+          "const": "0.1"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "intake",
+            "formulation_review",
+            "analysis",
+            "decision_review",
+            "action_review",
+            "learning_review",
+            "completed",
+            "blocked",
+            "cancelled"
+          ]
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "string"
+        },
+        "objectives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priorities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "included": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "excluded": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "currentFormulationVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdBy": {
+          "$ref": "#/$defs/agent"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "statement": {
+      "type": "object",
+      "required": [
+        "text",
+        "classification"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "classification": {
+          "type": "string",
+          "enum": [
+            "fact",
+            "assumption",
+            "inference",
+            "proposal",
+            "constraint",
+            "unknown"
+          ]
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "sourceNote": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "formulation": {
+      "type": "object",
+      "required": [
+        "id",
+        "taskId",
+        "version",
+        "status",
+        "owner",
+        "problemStatement",
+        "objectives",
+        "boundaries",
+        "assumptions",
+        "constraints",
+        "createdAt",
+        "changeReason"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "accepted",
+            "rejected",
+            "superseded"
+          ]
+        },
+        "owner": {
+          "const": "EM Structurer"
+        },
+        "problemStatement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objectives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "boundaries": {
+          "type": "object",
+          "properties": {
+            "included": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "excluded": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "systemContext": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/statement"
+          }
+        },
+        "concepts": {
+          "type": "array",
+          "description": "Provisional terms only; canonical CUT vocabulary is not defined by this schema.",
+          "items": {
+            "type": "object",
+            "required": [
+              "label"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "definition": {
+                "type": "string"
+              },
+              "sourceRef": {
+                "$ref": "#/$defs/reference"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "relations": {
+          "type": "array",
+          "description": "Descriptive links; no CUT inference semantics are implied.",
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "relation",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "relation": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/reference"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "changeReason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reviewedBy": {
+          "$ref": "#/$defs/agent"
+        },
+        "reviewNote": {
+          "type": "string"
+        },
+        "semanticLayer": {
+          "$ref": "#/$defs/semanticLayer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "id",
+        "taskId",
+        "kind",
+        "owner",
+        "status",
+        "content",
+        "createdAt",
+        "inputRefs",
+        "uncertaintyNote"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "formulationVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "intent",
+            "formulation",
+            "description",
+            "prediction",
+            "prescription",
+            "decision",
+            "action_plan",
+            "action_result",
+            "learning",
+            "communication",
+            "evidence",
+            "agent_report",
+            "visualization",
+            "dashboard",
+            "interactive_interface"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/agent"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "proposed",
+            "accepted",
+            "rejected",
+            "superseded",
+            "blocked"
+          ]
+        },
+        "content": {
+          "type": "object",
+          "required": [
+            "mediaType",
+            "value"
+          ],
+          "properties": {
+            "mediaType": {
+              "type": "string"
+            },
+            "value": {}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "mediaType": {
+                    "const": "application/vnd.eureka.ui-artifact+json"
+                  }
+                },
+                "required": [
+                  "mediaType"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "value": {
+                    "$ref": "#/$defs/uiArtifactContent"
+                  }
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "dependencyRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "uncertaintyNote": {
+          "type": "string"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "modelOrToolVersion": {
+          "type": "string"
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "transformations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "description",
+              "status"
+            ],
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "proposed",
+                  "evidenced",
+                  "implemented",
+                  "validated"
+                ]
+              },
+              "sourceRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/reference"
+                }
+              },
+              "operatorRef": {
+                "$ref": "#/$defs/reference"
+              },
+              "modifierRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/semanticRecord"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "uiArtifactContent": {
+      "type": "object",
+      "required": [
+        "viewType",
+        "title",
+        "purpose",
+        "renderer",
+        "components",
+        "sourceRefs",
+        "uncertaintyNote"
+      ],
+      "properties": {
+        "viewType": {
+          "type": "string",
+          "enum": [
+            "chart",
+            "dashboard",
+            "interactive_interface"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "renderer": {
+          "type": "string",
+          "enum": [
+            "declarative",
+            "sandboxed_react"
+          ]
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "title",
+              "dataRef"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stat",
+                  "line_chart",
+                  "bar_chart",
+                  "scatter_plot",
+                  "table",
+                  "timeline",
+                  "system_map",
+                  "form",
+                  "text"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dataRef": {
+                "$ref": "#/$defs/reference"
+              },
+              "semanticNote": {
+                "type": "string"
+              },
+              "spec": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "uncertaintyNote": {
+          "type": "string"
+        },
+        "sandboxBundle": {
+          "type": "object",
+          "required": [
+            "bundleRef",
+            "sha256",
+            "policyVersion"
+          ],
+          "properties": {
+            "bundleRef": {
+              "$ref": "#/$defs/reference"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "policyVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "renderer": {
+                "const": "sandboxed_react"
+              }
+            },
+            "required": [
+              "renderer"
+            ]
+          },
+          "then": {
+            "required": [
+              "sandboxBundle"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id",
+        "taskId",
+        "sequence",
+        "type",
+        "actor",
+        "occurredAt",
+        "payload"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "TaskCreated",
+            "FormulationProposed",
+            "FormulationReviewed",
+            "FormulationAccepted",
+            "FormulationRejected",
+            "AgentQueued",
+            "AgentInvoked",
+            "AgentCompleted",
+            "AgentFailed",
+            "ArtifactProposed",
+            "ArtifactReviewed",
+            "ViewRendered",
+            "GateRaised",
+            "DecisionRecorded",
+            "ActionPrepared",
+            "ActionAuthorized",
+            "ActionExecuted",
+            "OutcomeRecorded",
+            "LearningProposed",
+            "TaskStatusChanged",
+            "KnowledgeSourceCompared",
+            "KnowledgeRecovered",
+            "SemanticLayerChanged",
+            "GatePassed",
+            "GateBlocked",
+            "ValidationRecorded"
+          ]
+        },
+        "actor": {
+          "$ref": "#/$defs/agent"
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "formulationVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "reason": {
+          "type": "string"
+        },
+        "authorization": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "approved",
+                "rejected",
+                "not_required",
+                "pending"
+              ]
+            },
+            "authorizedBy": {
+              "$ref": "#/$defs/agent"
+            },
+            "scope": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "AgentQueued",
+                  "AgentInvoked",
+                  "AgentCompleted",
+                  "AgentFailed"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "required": [
+                  "invocationId",
+                  "agent"
+                ],
+                "properties": {
+                  "invocationId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "agent": {
+                    "$ref": "#/$defs/agent"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "ArtifactProposed",
+                  "ArtifactReviewed",
+                  "ViewRendered"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "required": [
+                  "artifactId"
+                ],
+                "properties": {
+                  "artifactId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "review": {
+                    "type": "string",
+                    "enum": [
+                      "accepted",
+                      "rejected",
+                      "revision_requested"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "semanticRecord": {
+      "type": "object",
+      "description": "A traceable semantic item. Fields record identity and provenance only; they do not define CUT grammar or mathematical meaning.",
+      "required": [
+        "id",
+        "label",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "evidenced",
+            "unresolved"
+          ]
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "contextRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "truthStatus": {
+          "type": "string",
+          "description": "Optional source-aligned truth state or degree; do not infer a numeric scale."
+        },
+        "modifierRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "representationRef": {
+          "$ref": "#/$defs/reference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "semanticRelation": {
+      "type": "object",
+      "description": "A traceable relation record; relation labels do not imply CUT inference semantics.",
+      "required": [
+        "id",
+        "from",
+        "label",
+        "to",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "evidenced",
+            "unresolved"
+          ]
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "contextRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "semanticLayer": {
+      "type": "object",
+      "description": "Versioned Structurer-owned semantic inventory. This data envelope intentionally does not specify CUT Language syntax or ACFL/GCLV operators.",
+      "required": [
+        "status",
+        "terms",
+        "entities",
+        "relations",
+        "predicates",
+        "context",
+        "modifiers",
+        "compositionRules",
+        "operatorRefs",
+        "sourceRefs",
+        "unresolvedSpecifications"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "provisional",
+            "reviewed",
+            "accepted"
+          ]
+        },
+        "terms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRelation"
+          }
+        },
+        "predicates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "modifiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "compositionRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticRecord"
+          }
+        },
+        "operatorRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reference"
+          }
+        },
+        "unresolvedSpecifications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

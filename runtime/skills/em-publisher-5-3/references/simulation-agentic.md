@@ -1,0 +1,4 @@
+# Simulation + Agentic Work — EM 10
+Core selects simulation, agentic work, or both according to risk, cost of error, importance, uncertainty, vulnerability, strategic impact, reversibility and scale. Capability gaps become CapabilityRequirements. Prefer reuse before construction: native capability → existing Eureka capability → supplied code/resource → lightweight code → Skill → App/system. Code, Skills, Apps and systems may emerge from problem solving; external effects remain governed.
+
+Exploit safe anticipatory parallelism when dependency-ready cognitive work can reduce latency without prejudging Eureka-0's decision or crossing a gate. Background/context preparation, descriptive analysis, scenarios, evidence organization, alternatives and validation preparation may run in parallel when appropriate. Synchronize before dependent integration. Never parallelize unauthorized external effects.

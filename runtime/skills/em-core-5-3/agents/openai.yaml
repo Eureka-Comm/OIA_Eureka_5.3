@@ -1,0 +1,10 @@
+interface:
+  display_name: "EM Core 5.3"
+  short_description: "Orquestación, integración y gobierno de Eureka"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  products:
+  - CHAT
+  - CODEX
+  allow_implicit_invocation: true

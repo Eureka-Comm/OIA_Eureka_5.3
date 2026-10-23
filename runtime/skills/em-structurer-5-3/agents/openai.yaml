@@ -1,0 +1,10 @@
+interface:
+  display_name: "EM Structurer 10"
+  short_description: "Estructura problemas, contexto y tareas de Eureka"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  products:
+  - CHAT
+  - CODEX
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Predictor 10"
+  short_description: "Explora escenarios, consecuencias e incertidumbre"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true

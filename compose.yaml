@@ -1,0 +1,105 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      runtime:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      EUREKA_DATA_DIR: /app/data
+      EUREKA_RUNTIME_CAPABILITIES_URL: http://runtime:3001/v1/capabilities
+      EUREKA_RUNTIME_INVOKE_URL: http://runtime:3001/v1/invocations
+      EUREKA_RUNTIME_API_TOKEN: ${EUREKA_RUNTIME_API_TOKEN:?Define EUREKA_RUNTIME_API_TOKEN en .env}
+      EUREKA_RUNTIME_ALLOW_HTTP: "true"
+    expose:
+      - "3000"
+    volumes:
+      - eureka_data:/app/data
+    networks:
+      - public
+      - runtime_internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  runtime:
+    build: .
+    command: ["node", "runtime/server.mjs"]
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      EUREKA_RUNTIME_DATA_FILE: /app/data/runtime.json
+      EUREKA_RUNTIME_API_TOKEN: ${EUREKA_RUNTIME_API_TOKEN:?Define EUREKA_RUNTIME_API_TOKEN en .env}
+      MODEL_API_URL: ${MODEL_API_URL:-https://api.openai.com/v1/responses}
+      MODEL_API_PROTOCOL: ${MODEL_API_PROTOCOL:-responses}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      MODEL_API_AUTH_MODE: ${MODEL_API_AUTH_MODE:-bearer}
+      MODEL_API_ALLOW_HTTP: ${MODEL_API_ALLOW_HTTP:-false}
+      MODEL_NAME: ${MODEL_NAME:-}
+      MODEL_MAX_OUTPUT_TOKENS: ${MODEL_MAX_OUTPUT_TOKENS:-3000}
+      MODEL_TIMEOUT_MS: ${MODEL_TIMEOUT_MS:-120000}
+    expose:
+      - "3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - eureka_data:/app/data
+    networks:
+      - runtime_internal
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-inference"]
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    expose:
+      - "11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - public
+      - runtime_internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?Define DOMAIN en .env}
+      SITE_USER: ${SITE_USER:?Define SITE_USER en .env}
+      SITE_PASSWORD_HASH: ${SITE_PASSWORD_HASH:?Define SITE_PASSWORD_HASH en .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - public
+
+volumes:
+  eureka_data:
+  caddy_data:
+  caddy_config:
+  ollama_data:
+
+networks:
+  public:
+  runtime_internal:
+    internal: true

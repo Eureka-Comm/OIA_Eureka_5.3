@@ -1,0 +1,163 @@
+openapi: 3.1.0
+info:
+  title: Eureka Multiverse Runtime API
+  version: 0.2.0
+  description: Private HTTP API for the Eureka Multiverse 5.3 skills runtime. EM Core owns routing; specialist Skills preserve their cognitive ownership.
+servers:
+  - url: https://{domain}
+    variables:
+      domain:
+        default: chat.example.com
+security:
+  - siteBasicAuth: []
+paths:
+  /api/v1/eureka/capabilities:
+    get:
+      summary: Read Eureka runtime capabilities
+      responses:
+        '200':
+          description: Capability registry, including unavailable dependencies.
+  /api/v1/eureka/invocations:
+    post:
+      summary: Submit an invocation to EM Core
+      description: The browser cannot choose a specialist directly. Core returns its routing and integrated result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvocationRequest'
+      responses:
+        '200':
+          description: Core response and trace identifiers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoreResponse'
+        '403':
+          description: Direct specialist invocation is not allowed.
+        '503':
+          description: Runtime, skill bundle, or model provider unavailable.
+  /api/v1/tasks:
+    post:
+      summary: Create a persistent Eureka task
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                taskId:
+                  type: string
+                intent:
+                  type: string
+                  maxLength: 12000
+      responses:
+        '201':
+          description: Task created with an initial TaskCreated event.
+        '409':
+          description: Task ID already exists.
+  /api/v1/tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/taskId'
+    get:
+      summary: Read persistent task, transcript, and current interaction state
+      responses:
+        '200':
+          description: Eureka task state.
+        '404':
+          description: Task not found.
+  /api/v1/tasks/{taskId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/taskId'
+    post:
+      summary: Send a message to the task; EM Core routes the work
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvocationRequest'
+      responses:
+        '200':
+          description: Core response and persisted task events.
+        '404':
+          description: Task not found.
+        '503':
+          description: Runtime, skills, or provider unavailable.
+  /api/v1/tasks/{taskId}/events:
+    parameters:
+      - $ref: '#/components/parameters/taskId'
+    get:
+      summary: Read task events after a sequence number
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: Ordered task events.
+        '404':
+          description: Task not found.
+components:
+  securitySchemes:
+    siteBasicAuth:
+      type: http
+      scheme: basic
+  parameters:
+    taskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,128}$'
+  schemas:
+    InvocationRequest:
+      type: object
+      required: [agent, task]
+      properties:
+        agent:
+          type: string
+          const: core
+        task:
+          type: string
+          maxLength: 12000
+        taskId:
+          type: string
+        formulationVersion:
+          type: [string, 'null']
+        input:
+          description: Text and opaque input_file/input_image parts passed to the configured model provider.
+          type: array
+          items:
+            type: object
+    CoreResponse:
+      type: object
+      required: [invocationId, taskId, agent, status, product, routedAgents]
+      properties:
+        invocationId:
+          type: string
+        taskId:
+          type: string
+        agent:
+          const: core
+        status:
+          type: string
+        product:
+          type: object
+          properties:
+            text:
+              type: string
+        routedAgents:
+          type: array
+          items:
+            type: string
+        routingReason:
+          type: string
+        trace:
+          type: object

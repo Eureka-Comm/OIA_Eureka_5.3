@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Descriptor 10"
+  short_description: "Describe el estado y contrasta las evidencias"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Publisher 10"
+  short_description: "Comunica resultados con procedencia y límites"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true

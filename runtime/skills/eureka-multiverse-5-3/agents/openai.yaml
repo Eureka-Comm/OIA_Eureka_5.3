@@ -1,0 +1,11 @@
+interface:
+  display_name: "Eureka Multiverse 5.3"
+  short_description: "Gobernanza de Eureka y activación de EM Core"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  default_prompt: "Usa $eureka-multiverse-5-3 para coordinar este problema bajo la autoridad de Eureka-0."
+policy:
+  products:
+  - CHAT
+  - CODEX
+  allow_implicit_invocation: true

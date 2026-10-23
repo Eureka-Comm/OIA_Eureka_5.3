@@ -1,0 +1,10 @@
+{
+  "name": "eureka-chat-vps",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.mjs",
+    "build": "node scripts/build.mjs && node scripts/validate-artifact.mjs && node --check runtime/server.mjs && node --check server.mjs"
+  }
+}

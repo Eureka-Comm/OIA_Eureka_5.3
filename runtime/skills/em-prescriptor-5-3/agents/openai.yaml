@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Prescriptor 10"
+  short_description: "Compara alternativas y justifica decisiones"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true

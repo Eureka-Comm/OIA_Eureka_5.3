@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+runtime-data/
+site-deployment.tar.gz

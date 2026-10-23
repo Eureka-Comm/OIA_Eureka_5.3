@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Actioner 10"
+  short_description: "Prepara y ejecuta acciones autorizadas y verificables"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true

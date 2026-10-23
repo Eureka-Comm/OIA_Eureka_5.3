@@ -1,0 +1,7 @@
+interface:
+  display_name: "EM Installer 10"
+  short_description: "Diseña e integra capacidades y sistemas operativos"
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+policy:
+  allow_implicit_invocation: true
