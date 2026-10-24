@@ -1,6 +1,6 @@
-# Eureka Multiverse · Chat privado en VPS
+# Eureka Multiverse · Chat para VPS
 
-Interfaz privada para conversar con el runtime de agentes de Eureka Multiverse. Se ejecuta como una aplicación Node.js en Docker detrás de Caddy, con HTTPS y autenticación HTTP Basic.
+Interfaz para conversar con el runtime de agentes de Eureka Multiverse. Se ejecuta como una aplicación Node.js en Docker detrás de Caddy, con HTTPS y autenticación HTTP Basic.
 
 ## Estado real
 
@@ -87,6 +87,69 @@ ssh -i "$env:USERPROFILE\.ssh\eureka_cr11" -o IdentitiesOnly=yes -N -L 5174:127.
 ```
 
 Escribe la frase de contraseña de tu clave SSH cuando la solicite. Mientras ese comando siga abierto, visita `http://localhost:5174` en tu navegador. El tráfico entre tu computadora y el VPS viaja dentro de SSH; el puerto web del chat no queda publicado en Internet. Para cerrar el acceso, detén el túnel con `Ctrl+C`.
+
+## IP pública en EUAPI con HTTPS y contraseña
+
+Usa esta modalidad si quieres abrir el chat por la IP pública y conservar el Caddy existente de EUAPI. Añade un sitio IP con HTTPS y Basic Auth al Caddy actual, y conecta solo el contenedor `app` a la red Docker de ese Caddy. No publiques el puerto de la app ni cambies el bloque de `eurekamultiverse.ai`.
+
+Primero confirma el nombre de la red compartida y la versión de Caddy:
+
+```bash
+docker inspect eureka-caddy --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}'
+docker exec eureka-caddy caddy version
+```
+
+Usa el nombre de red que devuelve el primer comando en `EUAPI_CADDY_NETWORK` del `.env` del proyecto. Crea ese `.env` desde `.env.example`; como Compose evalúa variables del servicio Caddy aunque esté excluido por perfil, conserva `DOMAIN=localhost`, `SITE_USER=unused` y `SITE_PASSWORD_HASH=unused`. En el mismo archivo define `EUAPI_CADDY_NETWORK` con la red anterior y un valor aleatorio para `EUREKA_RUNTIME_API_TOKEN`. Arranca primero el proyecto nuevo para que la app quede lista en la red compartida:
+
+```bash
+docker compose -p eureka-chat -f compose.yaml -f compose.existing-caddy.yaml up -d --build
+docker compose -p eureka-chat -f compose.yaml -f compose.existing-caddy.yaml ps
+```
+
+Confirma que la fila del runtime indique `healthy`. Luego haz una copia de seguridad y añade al `/opt/eureka/Caddyfile` un bloque adicional con la IP pública del Droplet. Genera un hash bcrypt en el servidor con Caddy; escribe una contraseña larga y única cuando la solicite el comando:
+
+```bash
+read -rsp 'Contraseña del chat: ' CHAT_PASSWORD; echo
+docker exec eureka-caddy caddy hash-password --plaintext "$CHAT_PASSWORD"
+unset CHAT_PASSWORD
+```
+
+Antes de editar, guarda una copia del Caddyfile actual:
+
+```bash
+cp /opt/eureka/Caddyfile "/opt/eureka/Caddyfile.backup.$(date +%Y%m%d-%H%M%S)"
+```
+
+Bloque que se añade al Caddyfile, sustituyendo la IP y las dos cadenas de ejemplo:
+
+```caddyfile
+143.198.230.30 {
+    encode zstd gzip
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+    }
+    basic_auth {
+        eureka $2a$14$REEMPLAZA_CON_EL_HASH_BCRYPT
+    }
+    reverse_proxy eureka-chat:3000
+}
+```
+
+Antes de recargar el proxy, valida el archivo:
+
+```bash
+docker exec eureka-caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Después de guardar, valida el Caddyfile. Solo si la validación termina correctamente, recarga el Caddy existente:
+
+```bash
+docker exec eureka-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Abre `https://<IP-publica-del-Droplet>` e inicia sesión con el usuario y contraseña definidos en el bloque nuevo. Caddy conserva el sitio actual en el mismo archivo. Si la validación falla, no recargues; restaura la copia de seguridad del Caddyfile antes de continuar. Los certificados IP de Let's Encrypt requieren el perfil `shortlived` y se renuevan automáticamente; mantén abiertos los puertos 80 y 443.
 
 ## Configuración
 

@@ -1,0 +1,18 @@
+services:
+  # Do not start a second listener on EUAPI's ports 80/443.
+  caddy:
+    profiles:
+      - public-https
+
+  # Attach only the chat app to EUAPI's existing reverse-proxy network.
+  # The runtime stays on its private, project-scoped network.
+  app:
+    networks:
+      euapi_caddy:
+        aliases:
+          - eureka-chat
+
+networks:
+  euapi_caddy:
+    external: true
+    name: ${EUAPI_CADDY_NETWORK:-eureka_default}
