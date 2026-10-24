@@ -115,6 +115,31 @@ paths:
           description: A valid Eureka API key is required.
         '404':
           description: Task not found.
+  /api/v1/tasks/{taskId}/formulations/propose:
+    parameters:
+      - $ref: '#/components/parameters/taskId'
+    post:
+      summary: Ask EM Structurer to propose a versioned task formulation
+      description: Persists the proposal and a pending non-blocking Eureka-0 review gate. This endpoint cannot accept or reject a formulation.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                context:
+                  type: string
+                  maxLength: 12000
+      responses:
+        '201':
+          description: Versioned proposal and pending review gate persisted.
+        '401':
+          description: A valid Eureka API key is required.
+        '404':
+          description: Task not found.
+        '503':
+          description: Runtime, EM Structurer Skill, or model provider unavailable.
 components:
   securitySchemes:
     eurekaApiKey:

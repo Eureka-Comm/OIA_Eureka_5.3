@@ -145,7 +145,7 @@
         },
         "taskId": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1
         },
         "parentInvocationId": {
           "type": "string",
@@ -197,8 +197,10 @@
           }
         },
         "formulationVersion": {
-          "type": "integer",
-          "minimum": 1
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
         },
         "outputArtifactRefs": {
           "type": "array",
@@ -233,6 +235,23 @@
       },
       "additionalProperties": false
     },
+    "gate": {
+      "type": "object",
+      "required": ["id", "kind", "status", "raisedAt", "blocking"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "kind": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["pending", "passed", "blocked", "waived"] },
+        "formulationVersion": { "type": "integer", "minimum": 1 },
+        "requiredReviewer": { "$ref": "#/$defs/agent" },
+        "raisedAt": { "type": "string", "format": "date-time" },
+        "blocking": { "type": "boolean" },
+        "note": { "type": "string" },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "reviewNote": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "task": {
       "type": "object",
       "required": [
@@ -248,7 +267,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1
         },
         "schemaVersion": {
           "const": "0.1"
@@ -319,6 +338,18 @@
         "currentFormulationVersion": {
           "type": "integer",
           "minimum": 0
+        },
+        "formulations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/formulation" }
+        },
+        "gates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/gate" }
+        },
+        "agentInvocations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentInvocation" }
         },
         "createdBy": {
           "$ref": "#/$defs/agent"
@@ -393,11 +424,11 @@
       "properties": {
         "id": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1
         },
         "taskId": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1
         },
         "version": {
           "type": "integer",
@@ -856,7 +887,7 @@
         },
         "taskId": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 1
         },
         "sequence": {
           "type": "integer",
@@ -866,6 +897,9 @@
           "type": "string",
           "enum": [
             "TaskCreated",
+            "MessageReceived",
+            "RoutingDecided",
+            "CoreCompleted",
             "FormulationProposed",
             "FormulationReviewed",
             "FormulationAccepted",
@@ -899,6 +933,11 @@
         "occurredAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Compatibility timestamp; occurredAt is the canonical event timestamp."
         },
         "formulationVersion": {
           "type": "integer",

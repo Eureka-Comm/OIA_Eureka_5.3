@@ -71,10 +71,127 @@ function mutateTask(taskId, callback) {
 }
 
 function appendTaskEvent(task, type, data = {}) {
-  const event = { sequence: task.events.length + 1, type, at: new Date().toISOString(), ...data };
+  const at = new Date().toISOString();
+  const { actor = "system", payload, ...details } = data;
+  const event = { id: crypto.randomUUID(), taskId: task.id, sequence: task.events.length + 1, type, actor, at, occurredAt: at, payload: payload || details };
+  if (Number.isInteger(details.formulationVersion) && details.formulationVersion > 0) event.formulationVersion = details.formulationVersion;
+  if (typeof details.reason === "string") event.reason = details.reason;
   task.events.push(event);
   task.updatedAt = event.at;
   return event;
+}
+
+function ensureTaskState(task) {
+  task.formulations ||= [];
+  task.currentFormulationVersion ??= 0;
+  task.gates ||= [];
+  task.agentInvocations ||= [];
+  task.schemaVersion ||= "0.1";
+  task.createdBy ||= "system";
+  return task;
+}
+
+function parseJsonObject(text, errorMessage) {
+  const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(normalized);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected object");
+    return parsed;
+  } catch { throw Object.assign(new Error(errorMessage), { status: 502 }); }
+}
+
+function normalizeStatementList(value, field, classification = "proposal") {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50 || value.some(item => typeof item !== "string" || !item.trim() || item.length > 2000)) {
+    throw Object.assign(new Error(`La formulación contiene una lista ${field} no válida.`), { status: 502 });
+  }
+  return value.map(text => ({ text: text.trim(), classification, evidenceRefs: [], sourceNote: "Propuesta generada por EM Structurer; requiere revisión humana." }));
+}
+
+async function proposeFormulation(taskId, body) {
+  if (!providerConfigured() || !skills[roles.structurer.skill] || !systemSkill) throw Object.assign(new Error("EM Structurer requiere runtime, Skills y proveedor de inferencia disponibles."), { status: 503 });
+  const task = await getTask(taskId);
+  if (!task) throw Object.assign(new Error("No se encontró la tarea."), { status: 404 });
+  if (task.formulations?.some(item => item.status === "proposed")) throw Object.assign(new Error("Ya existe una formulación pendiente de revisión para esta tarea."), { status: 409 });
+  const latestMessage = typeof body.context === "string" ? body.context.trim() : "";
+  if (latestMessage.length > 12000) throw Object.assign(new Error("El contexto admite hasta 12 000 caracteres."), { status: 400 });
+  const intent = task.intent || task.messages.find(message => message.role === "user")?.text || "";
+  const conversationContext = (task.messages || []).slice(-20).map(message => `${message.role === "user" ? "Usuario" : "Eureka"}: ${message.text}`).join("\n\n");
+  if (!intent && !latestMessage) throw Object.assign(new Error("La tarea necesita una intención o contexto para formularse."), { status: 400 });
+  const prior = task.formulations?.at(-1);
+  const prompt = [
+    `Intención inicial de la tarea:\n${intent}${conversationContext ? `\n\nConversación reciente:\n${conversationContext}` : ""}${latestMessage ? `\n\nContexto adicional:\n${latestMessage}` : ""}`,
+    prior ? `\n\nFormulación previa v${prior.version} (propón una nueva versión solo si el cambio lo justifica):\n${JSON.stringify(prior)}` : "",
+    "\n\nDevuelve únicamente JSON con estas propiedades: problemStatement (string), objectives (array de strings), boundaries (objeto con included y excluded, ambos arrays de strings), assumptions (array de strings), constraints (array de strings), changeReason (string). No inventes evidencia ni términos canónicos CUT, operadores, cálculos ACFL/GCLV o semántica que no haya sido especificada. Esta es una propuesta, no una aceptación.",
+  ].join("");
+  const result = await infer(instructionsFor(roles.structurer.skill, "Formula y revisa el problema según la Skill completa de EM Structurer. Preserva ambigüedades como preguntas o supuestos; no decidas por Eureka-0."), [{ type: "input_text", text: prompt }], AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000)));
+  const draft = parseJsonObject(result.text, "EM Structurer no devolvió una formulación JSON válida.");
+  if (typeof draft.problemStatement !== "string" || !draft.problemStatement.trim() || draft.problemStatement.length > 12000 || typeof draft.changeReason !== "string" || !draft.changeReason.trim()) throw Object.assign(new Error("La formulación de EM Structurer no incluye problemStatement y changeReason válidos."), { status: 502 });
+  const boundaries = draft.boundaries || {};
+  if (!boundaries || typeof boundaries !== "object" || Array.isArray(boundaries)) throw Object.assign(new Error("La formulación contiene boundaries no válidos."), { status: 502 });
+  const included = boundaries.included ?? [];
+  const excluded = boundaries.excluded ?? [];
+  if (![included, excluded].every(list => Array.isArray(list) && list.length <= 50 && list.every(item => typeof item === "string" && item.trim() && item.length <= 2000))) throw Object.assign(new Error("La formulación contiene límites no válidos."), { status: 502 });
+  const proposed = await mutateTask(taskId, current => {
+    ensureTaskState(current);
+    const version = current.formulations.length ? Math.max(...current.formulations.map(item => item.version)) + 1 : 1;
+    const now = new Date().toISOString();
+    const formulation = {
+      id: crypto.randomUUID(), taskId, version, status: "proposed", owner: "EM Structurer",
+      problemStatement: draft.problemStatement.trim(),
+      objectives: normalizeStatementList(draft.objectives, "objectives"),
+      boundaries: { included: included.map(item => item.trim()), excluded: excluded.map(item => item.trim()) },
+      assumptions: normalizeStatementList(draft.assumptions, "assumptions", "assumption"),
+      constraints: normalizeStatementList(draft.constraints, "constraints", "constraint"),
+      createdAt: now, changeReason: draft.changeReason.trim(),
+    };
+    current.formulations.push(formulation);
+    current.currentFormulationVersion = version;
+    current.status = "formulation_review";
+    const gate = { id: crypto.randomUUID(), kind: "formulation_review", status: "pending", formulationVersion: version, requiredReviewer: "Eureka-0", raisedAt: now, blocking: false, note: "La propuesta requiere revisión humana antes de considerarse aceptada." };
+    current.gates.push(gate);
+    appendTaskEvent(current, "FormulationProposed", { actor: "EM Structurer", formulationVersion: version, reason: formulation.changeReason, payload: { formulationId: formulation.id, formulation, providerResponseId: result.providerResponseId } });
+    appendTaskEvent(current, "GateRaised", { actor: "EM Core", formulationVersion: version, reason: gate.note, payload: { gateId: gate.id, kind: gate.kind, status: gate.status, blocking: gate.blocking } });
+    return { formulation, gate };
+  });
+  return { taskId, ...proposed, trace: { providerResponseId: result.providerResponseId, skillVersion: "5.3.2", instructionDigest: skills[roles.structurer.skill].digest } };
+}
+
+async function reviewFormulation(taskId, version, body) {
+  const configuredReviewer = process.env.EUREKA_ZERO_REVIEW_USERNAME || "";
+  if (!configuredReviewer || body.reviewerUsername !== configuredReviewer) throw Object.assign(new Error("Esta sesión no está vinculada a una identidad revisora de Eureka-0."), { status: 403 });
+  if (!["accepted", "rejected"].includes(body.decision)) throw Object.assign(new Error("decision debe ser accepted o rejected."), { status: 400 });
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 2000) : "";
+  const result = await mutateTask(taskId, current => {
+    ensureTaskState(current);
+    const formulation = current.formulations.find(item => item.version === version);
+    if (!formulation) return { error: "No se encontró esa versión de formulación.", status: 404 };
+    if (formulation.status !== "proposed") return { error: "La formulación ya fue revisada y no admite otra decisión.", status: 409 };
+    const gate = current.gates.find(item => item.kind === "formulation_review" && item.formulationVersion === version && item.status === "pending");
+    if (!gate) return { error: "No existe un gate de revisión pendiente para esta versión.", status: 409 };
+    const now = new Date().toISOString();
+    formulation.status = body.decision;
+    formulation.reviewedBy = "Eureka-0";
+    formulation.reviewNote = note;
+    gate.status = body.decision === "accepted" ? "passed" : "blocked";
+    gate.reviewedAt = now;
+    gate.reviewNote = note;
+    if (body.decision === "accepted") {
+      for (const previous of current.formulations) if (previous.version !== version && previous.status === "accepted") previous.status = "superseded";
+      current.status = "analysis";
+      appendTaskEvent(current, "FormulationAccepted", { actor: "Eureka-0", formulationVersion: version, reason: note || "Formulación aceptada por la persona revisora configurada.", payload: { formulationId: formulation.id, reviewer: configuredReviewer } });
+      appendTaskEvent(current, "GatePassed", { actor: "Eureka-0", formulationVersion: version, reason: note || "Gate de revisión de formulación aprobado.", payload: { gateId: gate.id, kind: gate.kind } });
+    } else {
+      current.status = "formulation_review";
+      appendTaskEvent(current, "FormulationRejected", { actor: "Eureka-0", formulationVersion: version, reason: note || "Formulación rechazada; requiere una nueva propuesta.", payload: { formulationId: formulation.id, reviewer: configuredReviewer } });
+      appendTaskEvent(current, "GateBlocked", { actor: "Eureka-0", formulationVersion: version, reason: note || "La formulación fue rechazada.", payload: { gateId: gate.id, kind: gate.kind } });
+    }
+    appendTaskEvent(current, "FormulationReviewed", { actor: "Eureka-0", formulationVersion: version, reason: note || `Revisión registrada: ${body.decision}.`, payload: { formulationId: formulation.id, decision: body.decision, reviewer: configuredReviewer } });
+    return { formulation, gate };
+  });
+  if (!result) throw Object.assign(new Error("No se encontró la tarea."), { status: 404 });
+  if (result.error) throw Object.assign(new Error(result.error), { status: result.status });
+  return { taskId, ...result, reviewer: "Eureka-0" };
 }
 
 function providerConfigured() {
@@ -236,10 +353,10 @@ async function invokeCore(body) {
   }
   await updateStore(state => {
     const now = new Date().toISOString();
-    const current = state.tasks[taskId] || { id: taskId, createdAt: now, updatedAt: now, status: "active", interactionState: "Dialogue/Explore", messages: [], events: [] };
-    if (!current.events.length) appendTaskEvent(current, "TaskCreated", { actor: "Eureka-0" });
+    const current = ensureTaskState(state.tasks[taskId] || { id: taskId, intent: "", createdAt: now, updatedAt: now, status: "intake", interactionState: "Dialogue/Explore", messages: [], events: [] });
+    if (!current.events.length) appendTaskEvent(current, "TaskCreated", { actor: "system" });
     current.messages.push({ role: "user", text: task, at: now });
-    appendTaskEvent(current, "MessageReceived", { actor: "Eureka-0", text: task, attachments: Array.isArray(body.input) ? body.input.filter(part => part.type === "input_file" || part.type === "input_image").map(part => ({ type: part.type, filename: part.filename, media_type: part.media_type })) : [] });
+    appendTaskEvent(current, "MessageReceived", { actor: "system", text: task, attachments: Array.isArray(body.input) ? body.input.filter(part => part.type === "input_file" || part.type === "input_image").map(part => ({ type: part.type, filename: part.filename, media_type: part.media_type })) : [] });
     current.interactionState = "Understand/Frame";
     state.tasks[taskId] = current;
   });
@@ -266,9 +383,31 @@ async function invokeCore(body) {
       if (!skills[role.skill]) throw Object.assign(new Error(`Falta la Skill versionada de ${role.name}.`), { status: 503 });
       const prior = step.dependsOn.map(dependency => results[dependency]).filter(Boolean).map(result => `### ${result.name}\n${result.text}`).join("\n\n");
       const taskContent = [...content, { type: "input_text", text: `Subtarea asignada por EM Core (${role.name}):\n${step.task}${prior ? `\n\nResultados previos que esta subtarea debe considerar:\n${prior}` : ""}` }];
-      await mutateTask(taskId, current => appendTaskEvent(current, "AgentInvoked", { actor: "EM Core", agent: step.agent, task: step.task, dependsOn: step.dependsOn }));
-      const result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones.`), taskContent, timeout);
-      await mutateTask(taskId, current => appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: step.agent, providerResponseId: result.providerResponseId, text: result.text }));
+      const invocationId = crypto.randomUUID();
+      await mutateTask(taskId, current => {
+        ensureTaskState(current);
+        const invocation = { id: invocationId, taskId, agent: role.name, requestedBy: "EM Core", reason: plan.reason, executionMode: ready.length > 1 ? "parallel" : "sequential", status: "running", provider: "eureka-runtime", inputRefs: [], formulationVersion: current.currentFormulationVersion || null, requestedAt: new Date().toISOString(), startedAt: new Date().toISOString(), capabilityVersion: "5.3.2" };
+        current.agentInvocations.push(invocation);
+        appendTaskEvent(current, "AgentInvoked", { actor: "EM Core", agent: role.name, reason: plan.reason, formulationVersion: invocation.formulationVersion || undefined, payload: { invocationId, agent: role.name, reason: plan.reason, status: "running", dependsOn: step.dependsOn } });
+      });
+      let result;
+      try {
+        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones.`), taskContent, timeout);
+      } catch (error) {
+        await mutateTask(taskId, current => {
+          ensureTaskState(current);
+          const invocation = current.agentInvocations.find(item => item.id === invocationId);
+          if (invocation) { invocation.status = "failed"; invocation.completedAt = new Date().toISOString(); invocation.failureNote = String(error.message || error).slice(0, 500); }
+          appendTaskEvent(current, "AgentFailed", { actor: role.name, agent: role.name, reason: String(error.message || error).slice(0, 500), payload: { invocationId, agent: role.name, status: "failed" } });
+        });
+        throw error;
+      }
+      await mutateTask(taskId, current => {
+        ensureTaskState(current);
+        const invocation = current.agentInvocations.find(item => item.id === invocationId);
+        if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; }
+        appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, formulationVersion: invocation?.formulationVersion || undefined, payload: { invocationId, agent: role.name, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
+      });
       return { index, value: { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId } };
     }));
     for (const { index, value } of batch) { results[index] = value; pending.delete(index); }
@@ -314,7 +453,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     const listed = capabilities();
     const core = listed.find(capability => capability.id === "core");
-    return json(response, 200, { service: "eureka-runtime-api", runtimeVersion: "0.2.0", skillsPackage: "eureka-multiverse-5-3@5.3.2", capabilities: listed, integrations: { emFactoryMcp: "unavailable", mathematicalEngine: "unavailable" }, ...(core?.status === "unavailable" ? { reason: core.reason } : {}) });
+    return json(response, 200, { service: "eureka-runtime-api", runtimeVersion: "0.3.0", skillsPackage: "eureka-multiverse-5-3@5.3.2", capabilities: listed, integrations: { emFactoryMcp: "unavailable", mathematicalEngine: "unavailable" }, ...(core?.status === "unavailable" ? { reason: core.reason } : {}) });
   }
   if (request.method === "POST" && url.pathname === "/v1/tasks") {
     try {
@@ -323,18 +462,29 @@ const server = http.createServer(async (request, response) => {
       const task = await updateStore(state => {
         if (state.tasks[taskId]) return null;
         const now = new Date().toISOString();
-        const created = { id: taskId, intent: typeof body.intent === "string" ? body.intent.slice(0, 12000) : "", createdAt: now, updatedAt: now, status: "active", interactionState: "Dialogue/Explore", messages: [], events: [] };
-        appendTaskEvent(created, "TaskCreated", { actor: "Eureka-0", intent: created.intent });
+        const created = ensureTaskState({ id: taskId, intent: typeof body.intent === "string" ? body.intent.slice(0, 12000) : "", createdAt: now, updatedAt: now, status: "intake", interactionState: "Dialogue/Explore", messages: [], events: [] });
+        appendTaskEvent(created, "TaskCreated", { actor: "system", intent: created.intent });
         state.tasks[taskId] = created;
         return created;
       });
       return task ? json(response, 201, task) : json(response, 409, { error: "La tarea ya existe." });
     } catch (error) { return json(response, error.status || 400, { error: error.message }); }
   }
+  const formulationProposalRoute = url.pathname.match(/^\/v1\/tasks\/([A-Za-z0-9_-]{1,128})\/formulations\/propose$/);
+  if (request.method === "POST" && formulationProposalRoute) {
+    try { return json(response, 201, await proposeFormulation(formulationProposalRoute[1], await readJson(request))); }
+    catch (error) { return json(response, error.status || 502, { error: error.message || "No se pudo proponer la formulación." }); }
+  }
+  const formulationReviewRoute = url.pathname.match(/^\/v1\/tasks\/([A-Za-z0-9_-]{1,128})\/formulations\/(\d+)\/review$/);
+  if (request.method === "POST" && formulationReviewRoute) {
+    try { return json(response, 200, await reviewFormulation(formulationReviewRoute[1], Number(formulationReviewRoute[2]), await readJson(request))); }
+    catch (error) { return json(response, error.status || 502, { error: error.message || "No se pudo registrar la revisión." }); }
+  }
   const taskRoute = url.pathname.match(/^\/v1\/tasks\/([A-Za-z0-9_-]{1,128})(?:\/(events|messages))?$/);
   if (taskRoute && request.method === "GET" && (!taskRoute[2] || taskRoute[2] === "events")) {
     const task = await getTask(taskRoute[1]);
     if (!task) return json(response, 404, { error: "No se encontró la tarea." });
+    ensureTaskState(task);
     if (taskRoute[2] === "events") {
       const after = Math.max(0, Number(url.searchParams.get("after") || 0));
       return json(response, 200, { taskId: task.id, events: task.events.filter(event => event.sequence > after) });

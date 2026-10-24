@@ -5,7 +5,8 @@ Interfaz privada para conversar con el runtime de agentes de Eureka Multiverse. 
 ## Estado real
 
 - El objetivo cognitivo y sus pendientes están definidos en `contracts/v0.1/arquitectura-cognitiva-eureka-multiverse-5-3.md`; la secuencia de trabajo está en el roadmap del workspace.
-- La interfaz persiste conversaciones y eventos básicos por tarea. Aún no expone el modelo completo de formulación revisable, gates, capa semántica compartida ni paneles de gobierno de Eureka-0.
+- El runtime persiste tareas, mensajes, invocaciones de especialistas, propuestas versionadas de EM Structurer y gates pendientes; el chat muestra la formulación y permite aceptar/rechazar con una cuenta Basic Auth dedicada vinculada mediante `EUREKA_ZERO_REVIEW_USERNAME`.
+- Para habilitar decisiones desde la interfaz, configura `EUREKA_ZERO_REVIEW_USERNAME` igual al usuario Caddy de una cuenta dedicada a la revisión Eureka-0. Sin esa variable, las formulaciones aparecen en modo de solo lectura.
 - El puente HTTP y un servicio privado están implementados en `worker/eureka-runtime.js` y `runtime/server.mjs`. El runtime carga las Skills fuente `eureka-multiverse-5-3@5.3.2` desde `runtime/skills/`, deja que EM Core determine respuesta directa o routing con dependencias, ejecuta los roles seleccionados y devuelve la síntesis a Core.
 - La API pública de Eureka está protegida con claves Bearer separadas del token interno app↔runtime. Se crean, listan y revocan en el VPS con `docker compose exec app node scripts/eureka-api-keys.mjs ...`; el servidor guarda solo hashes.
 - Los adjuntos se pueden enviar con cualquier extensión; el runtime conectado determina cuáles puede interpretar.

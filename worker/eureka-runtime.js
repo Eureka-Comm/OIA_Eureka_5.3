@@ -102,4 +102,28 @@ export async function createEurekaTask(request, env) {
   } catch (error) { return { status: 502, body: { error: "No se pudo crear la tarea en Eureka.", detail: String(error.message || error).slice(0, 200) } }; }
 }
 
+export async function proposeEurekaFormulation(taskId, request, env) {
+  if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return { status: 503, body: { error: "El runtime de Eureka no está disponible." } };
+  let body;
+  try { body = await request.json(); } catch { return { status: 400, body: { error: "Se esperaba un cuerpo JSON." } }; }
+  const target = new URL(env.EUREKA_RUNTIME_CAPABILITIES_URL);
+  target.pathname = target.pathname.replace(/\/v1\/capabilities\/?$/, `/v1/tasks/${encodeURIComponent(taskId)}/formulations/propose`);
+  try {
+    const response = await fetch(target, { method: "POST", headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(130000) });
+    return { status: response.status, body: await response.json().catch(() => ({ error: "Respuesta inválida del runtime." })) };
+  } catch (error) { return { status: 502, body: { error: "No se pudo solicitar una formulación a EM Structurer.", detail: String(error.message || error).slice(0, 200) } }; }
+}
+
+export async function reviewEurekaFormulation(taskId, version, decision, note, env) {
+  if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return { status: 503, body: { error: "El runtime de Eureka no está disponible." } };
+  const reviewerUsername = env.EUREKA_ZERO_REVIEW_USERNAME || "";
+  if (!reviewerUsername) return { status: 403, body: { error: "No se ha configurado una identidad revisora de Eureka-0." } };
+  const target = new URL(env.EUREKA_RUNTIME_CAPABILITIES_URL);
+  target.pathname = target.pathname.replace(/\/v1\/capabilities\/?$/, `/v1/tasks/${encodeURIComponent(taskId)}/formulations/${version}/review`);
+  try {
+    const response = await fetch(target, { method: "POST", headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ decision, note, reviewerUsername }), signal: AbortSignal.timeout(10000) });
+    return { status: response.status, body: await response.json().catch(() => ({ error: "Respuesta inválida del runtime." })) };
+  } catch (error) { return { status: 502, body: { error: "No se pudo registrar la revisión de Eureka-0.", detail: String(error.message || error).slice(0, 200) } }; }
+}
+
 export { agentIds };
