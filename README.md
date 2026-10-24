@@ -20,7 +20,7 @@ El paquete puede versionarse en GitHub para revisión, pero preparar Docker no s
 ## Requisitos del VPS
 
 - Linux con Docker Engine y Docker Compose.
-- Dominio o subdominio con DNS A hacia la IP pública del VPS.
+- IP pública estática del Droplet o un dominio/subdominio con DNS A hacia esa IP.
 - Puertos TCP 80 y 443 accesibles desde Internet.
 - Acceso a un proveedor compatible con Responses API y una credencial de servidor para inferencia.
 - Node.js 22 o superior en el equipo de desarrollo para ejecutar la validación local.
@@ -44,7 +44,7 @@ cd eureka-chat-interface
 cp .env.example .env
 ```
 
-Edita `.env` con dominio, usuario, hash de contraseña y token interno del runtime. Para OpenAI, configura `MODEL_API_PROTOCOL=responses`, `MODEL_API_URL=https://api.openai.com/v1/responses`, `MODEL_API_KEY` y `MODEL_NAME`. Para inferencia local con Ollama, configura `MODEL_API_PROTOCOL=chat_completions`, `MODEL_API_URL=http://ollama:11434/v1/chat/completions`, `MODEL_API_AUTH_MODE=none`, `MODEL_API_ALLOW_HTTP=true` y el tag de modelo en `MODEL_NAME`; habilita el perfil con `docker compose --profile local-inference up -d --build` y descarga un modelo adecuado a la memoria del VPS con `docker compose exec ollama ollama pull <modelo>`. Las imágenes requieren un modelo con visión; archivos arbitrarios usan Responses API. Genera también un valor aleatorio privado para el token interno. Genera el hash bcrypt para la contraseña:
+Edita `.env` con la IP pública del Droplet en `DOMAIN`, el usuario, hash de contraseña y token interno del runtime. No necesitas comprar un dominio para el primer despliegue: Caddy 2.11.7 obtiene un certificado HTTPS de Let's Encrypt para la IP usando el perfil `shortlived`; el certificado dura 160 horas y Caddy renueva automáticamente. Mantén los puertos 80 y 443 abiertos para que Caddy pueda validar y renovar el certificado. Para OpenAI, configura `MODEL_API_PROTOCOL=responses`, `MODEL_API_URL=https://api.openai.com/v1/responses`, `MODEL_API_KEY` y `MODEL_NAME`. Para inferencia local con Ollama, configura `MODEL_API_PROTOCOL=chat_completions`, `MODEL_API_URL=http://ollama:11434/v1/chat/completions`, `MODEL_API_AUTH_MODE=none`, `MODEL_API_ALLOW_HTTP=true` y el tag de modelo en `MODEL_NAME`; habilita el perfil con `docker compose --profile local-inference up -d --build` y descarga un modelo adecuado a la memoria del VPS con `docker compose exec ollama ollama pull <modelo>`. Las imágenes requieren un modelo con visión; archivos arbitrarios usan Responses API. Genera también un valor aleatorio privado para el token interno. Genera el hash bcrypt para la contraseña:
 
 ```bash
 read -rsp "Contraseña para el chat: " SITE_PASSWORD; echo
@@ -60,7 +60,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Abre `https://<tu-dominio>`. El estado del panel debe confirmar el runtime antes de invocar agentes. Para futuras versiones, ejecuta `git pull` y `docker compose up -d --build`.
+Abre `https://<IP-publica-del-Droplet>`. El estado del panel debe confirmar el runtime antes de invocar agentes. Para futuras versiones, ejecuta `git pull` y `docker compose up -d --build`.
 
 Para emitir una API key Eureka después del primer arranque:
 

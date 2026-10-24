@@ -1,5 +1,15 @@
+{
+	default_sni {$DOMAIN}
+}
+
 {$DOMAIN} {
   encode zstd gzip
+
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
 
   @eureka_api path /api/v1/*
   handle @eureka_api {
