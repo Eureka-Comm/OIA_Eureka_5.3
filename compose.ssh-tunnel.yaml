@@ -1,0 +1,10 @@
+services:
+  # Run without starting this project's public Caddy listener. The existing
+  # EUAPI Caddy stack owns ports 80/443; access this app through SSH only.
+  caddy:
+    profiles:
+      - public-https
+
+  app:
+    ports:
+      - "127.0.0.1:${EUREKA_CHAT_LOCAL_PORT:-5174}:3000"

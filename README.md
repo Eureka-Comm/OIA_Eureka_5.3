@@ -70,6 +70,24 @@ docker compose exec app node scripts/eureka-api-keys.mjs create "Integración"
 
 Copia la clave que se imprime; se muestra una sola vez. Usa `Authorization: Bearer <api_key>` al llamar `/api/v1/eureka/capabilities` o `/api/v1/eureka/invocations`. Consulta [`runtime/openapi.yaml`](runtime/openapi.yaml) para el contrato.
 
+## Acceso privado temporal mediante túnel SSH
+
+Si no administras el DNS y no quieres publicar la aplicación en la IP, despliega el proyecto Compose con nombre propio y sin iniciar su Caddy. Este modo deja la interfaz enlazada únicamente a `127.0.0.1:5174` dentro del VPS; no modifica el Caddy, frontend, backend ni volúmenes del proyecto existente.
+
+En el VPS, crea `.env` como se describe arriba. Para esta modalidad usa `DOMAIN=localhost`, `SITE_USER=unused` y `SITE_PASSWORD_HASH=unused`; el servicio Caddy queda desactivado y esos valores no se usan. Define un `EUREKA_RUNTIME_API_TOKEN` aleatorio y mantén `.env` con permisos `600`. Después, desde la carpeta del proyecto:
+
+```bash
+docker compose -p eureka-chat -f compose.yaml -f compose.ssh-tunnel.yaml up -d --build
+```
+
+Desde tu computadora abre un túnel SSH y déjalo ejecutándose:
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\eureka_cr11" -o IdentitiesOnly=yes -N -L 5174:127.0.0.1:5174 deploy@143.198.230.30
+```
+
+Escribe la frase de contraseña de tu clave SSH cuando la solicite. Mientras ese comando siga abierto, visita `http://localhost:5174` en tu navegador. El tráfico entre tu computadora y el VPS viaja dentro de SSH; el puerto web del chat no queda publicado en Internet. Para cerrar el acceso, detén el túnel con `Ctrl+C`.
+
 ## Configuración
 
 - `MODEL_API_URL`, `MODEL_API_PROTOCOL`, `MODEL_API_KEY`, `MODEL_NAME`: endpoint, protocolo, credencial y modelo del proveedor. Para Ollama se puede omitir la clave con `MODEL_API_AUTH_MODE=none`.
