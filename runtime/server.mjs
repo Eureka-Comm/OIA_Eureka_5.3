@@ -571,6 +571,14 @@ const server = http.createServer(async (request, response) => {
     }
     return json(response, 200, task);
   }
+  if (taskRoute && request.method === "DELETE" && !taskRoute[2]) {
+    const deleted = await updateStore(state => {
+      const exists = Object.hasOwn(state.tasks, taskRoute[1]);
+      if (exists) delete state.tasks[taskRoute[1]];
+      return exists;
+    });
+    return json(response, 200, { deleted });
+  }
   if (taskRoute && request.method === "POST" && taskRoute[2] === "messages") {
     try {
       const body = await readJson(request);
