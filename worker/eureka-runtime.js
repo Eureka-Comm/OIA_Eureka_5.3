@@ -72,7 +72,7 @@ export async function invokeEurekaAgent(request, env) {
     return { status: 502, body: { error: "Falló la conexión con el runtime de Eureka.", detail: String(error.message || error).slice(0, 240), invocationId: invocation.invocationId } };
   }
   const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload) return { status: 502, body: { error: `El runtime de Eureka no completó la invocación (HTTP ${response.status}).`, invocationId: invocation.invocationId } };
+  if (!response.ok || !payload) return { status: 502, body: { error: typeof payload?.error === "string" ? payload.error : `El runtime de Eureka no completó la invocación (HTTP ${response.status}).`, invocationId: invocation.invocationId } };
   if (payload.agent !== agent || typeof payload.status !== "string" || !Object.hasOwn(payload, "product")) {
     return { status: 502, body: { error: "La respuesta del runtime no cumple el contrato: debe confirmar agente, estado y producto.", invocationId: invocation.invocationId } };
   }
@@ -127,3 +127,4 @@ export async function reviewEurekaFormulation(taskId, version, decision, note, e
 }
 
 export { agentIds };
+
