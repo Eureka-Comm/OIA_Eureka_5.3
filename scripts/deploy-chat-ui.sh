@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Deploy only the chat continuity and feedback changes, pinned to a reviewed commit.
-# Leaves the original .env permissions, Compose/Caddy configuration, volumes, and math engine untouched.
+# Deploy only chat continuity/feedback changes; preserve the original .env and math engine.
 cd /opt/eureka-chat
 source_revision=b5cffdce6bc5a8462ac00b4d8371f807ab877047
 stage="/home/deploy/eureka-chat-ui-$source_revision"
 base_url="https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/$source_revision"
 files=(worker/index.js worker/eureka-runtime.js runtime/server.mjs server.mjs)
 envfile="$stage/.env.deploy"
+composefile="$stage/compose.deploy.yaml"
 
 mkdir -p "$stage"
 for file in "${files[@]}"; do
@@ -23,7 +23,7 @@ for file in "${files[@]}"; do
     --entrypoint node eureka-chat-app --check "/drop/$file"
 done
 
-# Give Compose a protected temporary env file, disabling its implicit lookup of root-only /opt/eureka-chat/.env.
+# Compose interpolation and the app's env_file both use this protected temporary copy.
 docker run --rm --network none --user 0 \
   -e "DEPLOY_UID=$(id -u)" -e "DEPLOY_GID=$(id -g)" \
   -v /opt/eureka-chat:/cfg:ro -v "$stage:/drop:rw" \
@@ -33,7 +33,14 @@ docker run --rm --network none --user 0 \
     chown "$DEPLOY_UID:$DEPLOY_GID" /drop/.env.deploy
     chmod 600 /drop/.env.deploy
   '
-cleanup() { rm -f "$envfile"; }
+if ! grep -Fqx '    env_file: .env' /opt/eureka-chat/compose.yaml; then
+  echo "Expected app env_file entry was not found; stopping without changing the deployment."
+  rm -f "$envfile"
+  exit 1
+fi
+sed "s|^    env_file: \.env$|    env_file: $envfile|" \
+  /opt/eureka-chat/compose.yaml > "$composefile"
+cleanup() { rm -f "$envfile" "$composefile"; }
 trap cleanup EXIT
 export COMPOSE_DISABLE_ENV_FILE=1
 
@@ -67,7 +74,7 @@ restore_sources() {
 }
 
 copy_sources
-compose=(docker compose --env-file "$envfile" -p eureka-chat -f compose.yaml -f compose.existing-caddy.yaml)
+compose=(docker compose --env-file "$envfile" --project-directory /opt/eureka-chat -p eureka-chat -f "$composefile" -f /opt/eureka-chat/compose.existing-caddy.yaml)
 if ! "${compose[@]}" up -d --no-deps --build runtime app; then
   echo "Build failed; restoring the previous chat files."
   restore_sources
