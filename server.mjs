@@ -98,7 +98,10 @@ const server = http.createServer(async (incoming, outgoing) => {
       }
     }
     const method = incoming.method || "GET";
-    const init = { method, headers };
+    const controller = new AbortController();
+    incoming.on("aborted", () => controller.abort());
+    outgoing.on("close", () => { if (!outgoing.writableEnded) controller.abort(); });
+    const init = { method, headers, signal: controller.signal };
     if (method !== "GET" && method !== "HEAD" && body.length) init.body = new Uint8Array(body);
     const request = new Request(`${protocol}://${host}${incoming.url || "/"}`, init);
     const response = await worker.fetch(request, env);

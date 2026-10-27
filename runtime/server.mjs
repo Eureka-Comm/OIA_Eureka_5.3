@@ -366,7 +366,22 @@ function contentForModel(input, task) {
   return parts;
 }
 
-async function invokeCore(body) {
+async function recordFeedback(taskId, body) {
+  if (!taskIdPattern.test(taskId)) throw Object.assign(new Error("Identificador de tarea no válido."), { status: 400 });
+  if (!Number.isInteger(body.messageIndex) || body.messageIndex < 0 || !["positive", "negative", "comment"].includes(body.rating) || typeof body.comment !== "string" || body.comment.length > 2000) throw Object.assign(new Error("La valoración o el comentario no son válidos."), { status: 400 });
+  const feedback = await mutateTask(taskId, current => {
+    if (!current.messages?.[body.messageIndex] || current.messages[body.messageIndex].role !== "assistant") throw Object.assign(new Error("No se encontró la respuesta de Eureka asociada."), { status: 404 });
+    current.feedback ||= [];
+    const item = { id: crypto.randomUUID(), messageIndex: body.messageIndex, rating: body.rating, comment: body.comment.trim(), submittedAt: new Date().toISOString() };
+    current.feedback.push(item);
+    appendTaskEvent(current, "ResponseFeedbackSubmitted", { actor: "Eureka-0", payload: item });
+    return item;
+  });
+  if (!feedback) throw Object.assign(new Error("No se encontró la conversación."), { status: 404 });
+  return feedback;
+}
+
+async function invokeCore(body, requestSignal = null) {
   if (!providerConfigured()) throw Object.assign(new Error("El runtime API está instalado, pero falta configurar un proveedor de inferencia."), { status: 503 });
   if (!systemSkill || !skills[roles.core.skill]) throw Object.assign(new Error("Falta el paquete de instrucciones de Eureka Multiverse 5.3 en el runtime."), { status: 503 });
   const task = typeof body.task === "string" ? body.task.trim() : "";
@@ -390,10 +405,11 @@ async function invokeCore(body) {
     state.tasks[taskId] = current;
   });
   const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
+  const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
   const planResult = await infer(
     instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. No hay herramientas externas registradas en este runtime; no inventes llamadas a MCP, búsquedas, cálculos, acciones, estado persistente o permisos. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. No fuerces un flujo fijo. No invoques directamente herramientas ni afirmes que lo hiciste.`),
     content,
-    timeout,
+    inferenceSignal,
     corePlanSchema,
   );
   const plan = parsePlan(planResult.text);
@@ -422,7 +438,7 @@ async function invokeCore(body) {
       });
       let result;
       try {
-        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones.`), taskContent, timeout);
+        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones.`), taskContent, inferenceSignal);
       } catch (error) {
         await mutateTask(taskId, current => {
           ensureTaskState(current);
@@ -447,7 +463,7 @@ async function invokeCore(body) {
   const synthesis = await infer(
     instructionsFor(roles.core.skill, "Integra las contribuciones producidas por los roles que Core convocó según su Skill. No ocultes discrepancias, incertidumbres, límites, gates ni requisitos de autorización. No conviertas propuestas en decisiones autorizadas. Distingue evidencia, inferencia y recomendación cuando aplique."),
     synthesisInput,
-    timeout,
+    inferenceSignal,
   );
   await mutateTask(taskId, current => {
     current.messages.push({ role: "assistant", text: synthesis.text, at: new Date().toISOString() });
@@ -477,6 +493,9 @@ async function invokeCore(body) {
 }
 
 const server = http.createServer(async (request, response) => {
+  const controller = new AbortController();
+  request.on("aborted", () => controller.abort());
+  response.on("close", () => { if (!response.writableEnded) controller.abort(); });
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, service: "eureka-runtime-api" });
   if (!authorized(request)) return json(response, 401, { error: "Autenticación de runtime inválida." });
@@ -510,6 +529,11 @@ const server = http.createServer(async (request, response) => {
       },
       ...(core?.status === "unavailable" ? { reason: core.reason } : {}),
     });
+  }
+  const feedbackRoute = url.pathname.match(/^\/v1\/tasks\/([A-Za-z0-9_-]{1,128})\/feedback$/);
+  if (request.method === "POST" && feedbackRoute) {
+    try { return json(response, 201, { feedback: await recordFeedback(feedbackRoute[1], await readJson(request)) }); }
+    catch (error) { return json(response, error.status || 400, { error: error.message || "No se pudo guardar el comentario." }); }
   }
   if (request.method === "POST" && url.pathname === "/v1/tasks") {
     try {
@@ -551,15 +575,16 @@ const server = http.createServer(async (request, response) => {
     try {
       const body = await readJson(request);
       if (!await getTask(taskRoute[1])) return json(response, 404, { error: "No se encontró la tarea." });
-      return json(response, 200, await invokeCore({ ...body, agent: "core", taskId: taskRoute[1] }));
-    } catch (error) { return json(response, error.status || 502, { error: error.message || "Falló la ejecución del turno." }); }
+      return json(response, 200, await invokeCore({ ...body, agent: "core", taskId: taskRoute[1] }, controller.signal));
+    } catch (error) { if (request.aborted || response.destroyed) return; return json(response, error.status || 502, { error: error.message || "Falló la ejecución del turno." }); }
   }
   if (request.method === "POST" && url.pathname === "/v1/invocations") {
     try {
       const body = await readJson(request);
       if (body.agent !== "core") return json(response, 403, { error: "La API pública del runtime acepta solicitudes para EM Core; Core controla el routing de especialistas." });
-      return json(response, 200, await invokeCore(body));
+      return json(response, 200, await invokeCore(body, controller.signal));
     } catch (error) {
+      if (request.aborted || response.destroyed) return;
       return json(response, error.status || 502, { error: error.message || "Falló la invocación de Eureka Runtime." });
     }
   }

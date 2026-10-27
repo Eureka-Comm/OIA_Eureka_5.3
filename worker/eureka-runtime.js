@@ -66,9 +66,10 @@ export async function invokeEurekaAgent(request, env) {
       method: "POST",
       headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(invocation),
-      signal: AbortSignal.timeout(120000),
+      signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
     });
   } catch (error) {
+    if (request.signal?.aborted) return { status: 499, body: { error: "La solicitud fue detenida.", invocationId: invocation.invocationId } };
     return { status: 502, body: { error: "Falló la conexión con el runtime de Eureka.", detail: String(error.message || error).slice(0, 240), invocationId: invocation.invocationId } };
   }
   const payload = await response.json().catch(() => null);
@@ -77,6 +78,16 @@ export async function invokeEurekaAgent(request, env) {
     return { status: 502, body: { error: "La respuesta del runtime no cumple el contrato: debe confirmar agente, estado y producto.", invocationId: invocation.invocationId } };
   }
   return { status: response.status, body: { ...payload, invocationId: payload.invocationId || invocation.invocationId, agent } };
+}
+
+export async function submitEurekaFeedback(taskId, feedback, env) {
+  if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return { status: 503, body: { error: "El runtime de Eureka no está disponible." } };
+  const target = new URL(env.EUREKA_RUNTIME_CAPABILITIES_URL);
+  target.pathname = target.pathname.replace(/\/v1\/capabilities\/?$/, `/v1/tasks/${encodeURIComponent(taskId)}/feedback`);
+  try {
+    const response = await fetch(target, { method: "POST", headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(feedback), signal: AbortSignal.timeout(10000) });
+    return { status: response.status, body: await response.json().catch(() => ({ error: "Respuesta inválida del runtime." })) };
+  } catch (error) { return { status: 502, body: { error: "No se pudo guardar el comentario en Eureka.", detail: String(error.message || error).slice(0, 200) } }; }
 }
 
 export async function requestEurekaTask(taskId, env, after = null) {
