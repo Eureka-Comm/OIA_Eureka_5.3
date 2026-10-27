@@ -54,6 +54,7 @@ services:
       - eureka_data:/app/data
     networks:
       - runtime_internal
+      - runtime_egress
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -106,3 +107,6 @@ networks:
   public:
   runtime_internal:
     internal: true
+  # Outbound-only provider access for the inference runtime; no published ports.
+  runtime_egress:
+
