@@ -1,5 +1,5 @@
 import { integrateApplication, renderApplicationPage } from "./applications.js";
-import { createEurekaTask, invokeEurekaAgent, proposeEurekaFormulation, readEurekaCapabilities, requestEurekaTask, reviewEurekaFormulation, submitEurekaFeedback } from "./eureka-runtime.js";
+import { createEurekaTask, deleteEurekaTask, invokeEurekaAgent, proposeEurekaFormulation, readEurekaCapabilities, requestEurekaTask, reviewEurekaFormulation, submitEurekaFeedback } from "./eureka-runtime.js";
 
 const roles = {
   core: { name: "EM Core", lane: "Orquestación adaptativa y gobierno. Integra resultados, determina el agente pertinente y comunica límites." },
@@ -214,6 +214,10 @@ export default { async fetch(request, env) {
   const privateTaskMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]{1,128})$/);
   if (privateTaskMatch && request.method === "GET") {
     const result = await requestEurekaTask(privateTaskMatch[1], env);
+    return json(result.body, result.status);
+  }
+  if (privateTaskMatch && request.method === "DELETE") {
+    const result = await deleteEurekaTask(privateTaskMatch[1], env);
     return json(result.body, result.status);
   }
   const privateProposalMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]{1,128})\/formulations\/propose$/);
