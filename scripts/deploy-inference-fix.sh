@@ -68,4 +68,3 @@ docker exec eureka-chat-runtime-1 node -e '
   process.exitCode = 1;
 });
 '
-
