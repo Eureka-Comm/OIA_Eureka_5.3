@@ -23,7 +23,7 @@ for file in "${files[@]}"; do
     --entrypoint node eureka-chat-app --check "/drop/$file"
 done
 
-# Compose needs the existing variables, while the original root-only .env stays untouched.
+# Give Compose a protected temporary env file, disabling its implicit lookup of root-only /opt/eureka-chat/.env.
 docker run --rm --network none --user 0 \
   -e "DEPLOY_UID=$(id -u)" -e "DEPLOY_GID=$(id -g)" \
   -v /opt/eureka-chat:/cfg:ro -v "$stage:/drop:rw" \
@@ -35,6 +35,7 @@ docker run --rm --network none --user 0 \
   '
 cleanup() { rm -f "$envfile"; }
 trap cleanup EXIT
+export COMPOSE_DISABLE_ENV_FILE=1
 
 stamp=$(date +%Y%m%d-%H%M%S)
 copy_sources() {
