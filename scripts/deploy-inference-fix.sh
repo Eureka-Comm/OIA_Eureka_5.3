@@ -8,13 +8,17 @@ fi
 
 cd /opt/eureka-chat
 stamp=$(date +%Y%m%d-%H%M%S)
+source_revision=8598645f65ba6ce71746cf33a519ab11bde39ffd
 echo "Respaldando y descargando el adaptador actualizado..."
 cp -p runtime/server.mjs "runtime/server.mjs.backup-$stamp"
 cp -p worker/eureka-runtime.js "worker/eureka-runtime.js.backup-$stamp"
 
-curl -fsSL https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/main/runtime/server.mjs -o runtime/server.mjs.new
-curl -fsSL https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/main/worker/eureka-runtime.js -o worker/eureka-runtime.js.new
-if [ "$(stat -c %s runtime/server.mjs.new)" -lt 30000 ] || ! grep -Fq 'server.listen(port' runtime/server.mjs.new; then
+base_url="https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/$source_revision"
+curl -fsSL "$base_url/runtime/server.mjs" -o runtime/server.mjs.new
+curl -fsSL "$base_url/worker/eureka-runtime.js" -o worker/eureka-runtime.js.new
+runtime_bytes=$(stat -c %s runtime/server.mjs.new)
+echo "runtime/server.mjs descargado: $runtime_bytes bytes"
+if [ "$runtime_bytes" -lt 30000 ] || ! grep -Fq 'server.listen(port' runtime/server.mjs.new; then
   echo "Error: runtime/server.mjs llegó incompleto; no se reemplazaron los archivos." >&2
   exit 1
 fi
