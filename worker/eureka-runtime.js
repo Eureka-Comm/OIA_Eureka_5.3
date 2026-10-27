@@ -101,6 +101,16 @@ export async function requestEurekaTask(taskId, env, after = null) {
   } catch (error) { return { status: 502, body: { error: "No se pudo leer la tarea de Eureka.", detail: String(error.message || error).slice(0, 200) } }; }
 }
 
+export async function deleteEurekaTask(taskId, env) {
+  if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return { status: 503, body: { error: "El runtime de Eureka no está disponible." } };
+  const target = new URL(env.EUREKA_RUNTIME_CAPABILITIES_URL);
+  target.pathname = target.pathname.replace(/\/v1\/capabilities\/?$/, `/v1/tasks/${encodeURIComponent(taskId)}`);
+  try {
+    const response = await fetch(target, { method: "DELETE", headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+    return { status: response.status, body: await response.json().catch(() => ({ error: "Respuesta inválida del runtime." })) };
+  } catch (error) { return { status: 502, body: { error: "No se pudo eliminar la conversación de Eureka.", detail: String(error.message || error).slice(0, 200) } }; }
+}
+
 export async function createEurekaTask(request, env) {
   if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return { status: 503, body: { error: "El runtime de Eureka no está disponible." } };
   let body;
