@@ -1,4 +1,4 @@
-Warning: truncated output (original token count: 9920)
+Warning: truncated output (original token count: 9927)
 Total output lines: 571
 
 import http from "node:http";
@@ -27,7 +27,7 @@ const corePlanSchema = {
   additionalProperties: false,
   properties: {
     mode: { type: "string", enum: ["direct", "delegate"] },
-    reason: { type: "string" },
+    reason: { type: "string", minLength: 1 },
     response: { type: "string" },
     steps: {
       type: "array",
@@ -37,7 +37,7 @@ const corePlanSchema = {
         additionalProperties: false,
         properties: {
           agent: { type: "string", enum: specialistIds },
-          task: { type: "string" },
+          task: { type: "string", minLength: 1 },
           dependsOn: { type: "array", items: { type: "integer", minimum: 0 } },
         },
         required: ["agent", "task", "dependsOn"],
@@ -136,7 +136,7 @@ function normalizeStatementList(value, field, classification = "proposal") {
 }
 
 async function proposeFormulation(taskId, body) {
-  if (!providerConfigured() || !skills[roles.structurer.skill] || !systemSkill) throw Object.assign(new Error("EM Structurer requiere runtime, Skills y proveedor de inferencia disponibles."), { status…6920 tokens truncated…an en un event store JSON; las herramientas MCP no están registradas en este runtime.",
+  if (!providerConfigured() || !skills[roles.structurer.skill] || !systemSkill) throw Object.assign(new Error("EM Structurer requiere runtime, Skills y proveedor de inferen…6927 tokens truncated…an en un event store JSON; las herramientas MCP no están registradas en este runtime.",
     },
   };
 }
