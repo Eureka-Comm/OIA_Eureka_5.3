@@ -231,7 +231,7 @@ async function readChatBody(request) { if ((request.headers.get("content-type") 
 async function chat(request, env) {
   let body; try { body = await readChatBody(request); } catch { return json({ error: "No se pudo leer el mensaje o los archivos adjuntos." }, 400); }
   const message = typeof body.message === "string" ? body.message.trim().slice(0, 12000) : "";
-  const key = "core";
+  const key = typeof body.agent === "string" && Object.hasOwn(roles, body.agent) ? body.agent : "core";
   const files = body.files || [];
   if (!message && !files.length) return json({ error: "Escribe un mensaje o adjunta un archivo." }, 400);
   if (files.length > 10) return json({ error: "Puedes adjuntar hasta 10 archivos por mensaje." }, 413);
