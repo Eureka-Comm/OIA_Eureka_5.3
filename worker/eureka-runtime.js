@@ -66,11 +66,15 @@ export async function invokeEurekaAgent(request, env) {
       method: "POST",
       headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify(invocation),
-      signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
+      signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000),
     });
   } catch (error) {
     if (request.signal?.aborted) return { status: 499, body: { error: "La solicitud fue detenida.", invocationId: invocation.invocationId } };
-    return { status: 502, body: { error: "Falló la conexión con el runtime de Eureka.", detail: String(error.message || error).slice(0, 240), invocationId: invocation.invocationId } };
+    const detail = String(error.message || error).slice(0, 240);
+    if (error.name === "TimeoutError" || /timeout/i.test(detail)) {
+      return { status: 504, body: { error: "Eureka excedió el límite de espera de cinco minutos.", detail: "La inferencia no devolvió una respuesta a tiempo. El runtime puede requerir revisión de latencia o de la carga del pipeline.", invocationId: invocation.invocationId } };
+    }
+    return { status: 502, body: { error: "Falló la conexión con el runtime de Eureka.", detail, invocationId: invocation.invocationId } };
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload) return { status: 502, body: { error: typeof payload?.error === "string" ? payload.error : `El runtime de Eureka no completó la invocación (HTTP ${response.status}).`, invocationId: invocation.invocationId } };
