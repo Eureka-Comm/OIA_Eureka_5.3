@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Deploy only chat continuity/feedback changes; preserve the original .env and math engine.
 cd /opt/eureka-chat
-source_revision=7c003b30148c1cd2141327518e04d9a2f73f9817
+source_revision=5ffbd6df344d3bcdc5b9567f3aaae7639164d60f
 stage="/home/deploy/eureka-chat-ui-$source_revision"
 base_url="https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/$source_revision"
 files=(worker/index.js worker/eureka-runtime.js runtime/server.mjs server.mjs)
@@ -33,6 +33,9 @@ docker run --rm --network none --user 0 \
     chown "$DEPLOY_UID:$DEPLOY_GID" /drop/.env.deploy
     chmod 600 /drop/.env.deploy
   '
+# Use the same limit in provider inference and the web-to-runtime bridge.
+sed -i '/^MODEL_TIMEOUT_MS=/d' "$envfile"
+printf '\nMODEL_TIMEOUT_MS=270000\n' >> "$envfile"
 if ! grep -Fqx '    env_file: .env' /opt/eureka-chat/compose.yaml; then
   echo "Expected app env_file entry was not found; stopping without changing the deployment."
   rm -f "$envfile"
