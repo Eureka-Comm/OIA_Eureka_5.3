@@ -317,9 +317,18 @@ async function infer(instructions, content, signal, outputSchema = null) {
   const protocol = process.env.MODEL_API_PROTOCOL || "responses";
   const providerHeaders = { "content-type": "application/json", accept: "application/json" };
   if (process.env.MODEL_API_AUTH_MODE !== "none" && process.env.MODEL_API_KEY) providerHeaders.authorization = `Bearer ${process.env.MODEL_API_KEY}`;
+  // Send only fields allowed by each provider content-part schema. The web
+  // adapter also carries MIME metadata for auditing; Responses API rejects it
+  // when forwarded as an unknown input_file property.
+  const providerContent = content.map(part => {
+    if (part.type === "input_text") return { type: "input_text", text: part.text || "" };
+    if (part.type === "input_image") return { type: "input_image", image_url: part.image_url, detail: part.detail || "auto" };
+    if (part.type === "input_file") return { type: "input_file", filename: part.filename, file_data: part.file_data };
+    return null;
+  }).filter(Boolean);
   const requestBody = protocol === "chat_completions"
-    ? { model: process.env.MODEL_NAME, messages: chatCompletionMessages(instructions, content), max_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
-    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content }], max_output_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
+    ? { model: process.env.MODEL_NAME, messages: chatCompletionMessages(instructions, providerContent), max_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
+    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }], max_output_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
   if (outputSchema && new URL(url).hostname === "api.openai.com") {
     requestBody[protocol === "chat_completions" ? "response_format" : "text"] = protocol === "chat_completions"
       ? { type: "json_schema", json_schema: { name: "eureka_core_routing", strict: true, schema: outputSchema } }
@@ -332,7 +341,12 @@ async function infer(instructions, content, signal, outputSchema = null) {
     signal,
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload) throw Object.assign(new Error(`El proveedor de inferencia no completó la solicitud (HTTP ${response.status}).`), { status: 502 });
+  if (!response.ok || !payload) {
+    const providerMessage = typeof payload?.error?.message === "string" ? payload.error.message.trim().slice(0, 500) : "";
+    const providerCode = typeof payload?.error?.code === "string" ? payload.error.code.slice(0, 100) : "";
+    const detail = [providerCode, providerMessage].filter(Boolean).join(": ");
+    throw Object.assign(new Error(`El proveedor de inferencia no completó la solicitud (HTTP ${response.status})${detail ? `: ${detail}` : ""}.`), { status: 502 });
+  }
   const text = protocol === "chat_completions" ? chatCompletionText(payload) : responseText(payload);
   if (!text) throw Object.assign(new Error("El proveedor de inferencia devolvió una respuesta vacía."), { status: 502 });
   return { text, providerResponseId: typeof payload.id === "string" ? payload.id : null };
