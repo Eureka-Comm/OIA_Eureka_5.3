@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Deploy only chat continuity/feedback changes; preserve the original .env and math engine.
 cd /opt/eureka-chat
-source_revision=fbdf2ca2738b034bed3f26e2abeecf4d83fbedc0
+source_revision=a311efb96f6eb3df7e722c3c76bd7b82fd5f4abd
 stage="/home/deploy/eureka-chat-ui-$source_revision"
 base_url="https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/$source_revision"
 files=(worker/index.js worker/eureka-runtime.js runtime/server.mjs server.mjs)
