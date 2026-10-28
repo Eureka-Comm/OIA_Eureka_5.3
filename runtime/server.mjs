@@ -381,6 +381,60 @@ async function recordFeedback(taskId, body) {
   return feedback;
 }
 
+async function invokeSpecialist(body, requestSignal = null) {
+  if (!providerConfigured()) throw Object.assign(new Error("El runtime API está instalado, pero falta configurar un proveedor de inferencia."), { status: 503 });
+  const agent = typeof body.agent === "string" ? body.agent : "";
+  const role = roles[agent];
+  if (!role || agent === "core") throw Object.assign(new Error("Agente especialista no válido."), { status: 400 });
+  if (!systemSkill || !skills[role.skill]) throw Object.assign(new Error("Falta la Skill versionada de " + role.name + "."), { status: 503 });
+  const task = typeof body.task === "string" ? body.task.trim() : "";
+  if (!task || task.length > 12000) throw Object.assign(new Error("El campo task es obligatorio y admite hasta 12 000 caracteres."), { status: 400 });
+  const taskId = typeof body.taskId === "string" && taskIdPattern.test(body.taskId) ? body.taskId : crypto.randomUUID();
+  const previousTask = await getTask(taskId);
+  const content = contentForModel(body.input, task);
+  if (previousTask && previousTask.intent) content.unshift({ type: "input_text", text: "Intención inicial de Eureka-0 para esta tarea:\n" + previousTask.intent });
+  if (previousTask && previousTask.messages && previousTask.messages.length) {
+    const history = previousTask.messages.slice(-24).map(message => (message.role === "user" ? "Eureka-0" : "Eureka") + ": " + message.text).join("\n\n");
+    content.unshift({ type: "input_text", text: "Historial de esta tarea; consérvalo como contexto:\n" + history });
+  }
+  const invocationId = typeof body.invocationId === "string" ? body.invocationId : crypto.randomUUID();
+  await updateStore(state => {
+    const now = new Date().toISOString();
+    const current = ensureTaskState(state.tasks[taskId] || { id: taskId, intent: "", createdAt: now, updatedAt: now, status: "intake", interactionState: "Dialogue/Explore", messages: [], events: [] });
+    if (!current.events.length) appendTaskEvent(current, "TaskCreated", { actor: "system" });
+    current.messages.push({ role: "user", text: task, at: now });
+    const invocation = { id: invocationId, taskId, agent: role.name, requestedBy: "Eureka-0", reason: "Agente seleccionado directamente en el chat.", executionMode: "direct", status: "running", provider: "eureka-runtime", inputRefs: [], formulationVersion: current.currentFormulationVersion || null, requestedAt: now, startedAt: now, capabilityVersion: "5.3.2" };
+    current.agentInvocations.push(invocation);
+    appendTaskEvent(current, "MessageReceived", { actor: "Eureka-0", text: task, attachments: Array.isArray(body.input) ? body.input.filter(part => part.type === "input_file" || part.type === "input_image").map(part => ({ type: part.type, filename: part.filename, media_type: part.media_type })) : [] });
+    appendTaskEvent(current, "AgentInvoked", { actor: "Eureka-0", agent: role.name, reason: invocation.reason, payload: { invocationId, agent, status: "running" } });
+    current.interactionState = "Solve/Coordinate";
+    state.tasks[taskId] = current;
+  });
+  const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
+  const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
+  try {
+    const result = await infer(instructionsFor(role.skill, "Responde desde la responsabilidad de " + role.name + " definida por su Skill completa. Esta es una invocación directa solicitada por Eureka-0; no simules routing de Core, especialistas adicionales, MCP, cálculos ni acciones que no se hayan ejecutado. Explicita límites y evidencia cuando corresponda."), content, inferenceSignal);
+    await mutateTask(taskId, current => {
+      ensureTaskState(current);
+      current.messages.push({ role: "assistant", text: result.text, at: new Date().toISOString() });
+      current.interactionState = "Dialogue/Explore";
+      const invocation = current.agentInvocations.find(item => item.id === invocationId);
+      if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; }
+      appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, payload: { invocationId, agent, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
+    });
+    return { invocationId, taskId, agent, status: "completed", product: { text: result.text }, text: result.text, routedAgents: [], routingReason: "Agente seleccionado directamente por Eureka-0.", trace: { taskId, formulationVersion: body.formulationVersion ?? null, skillVersion: "5.3.2", specialistInstructionDigests: { [agent]: skills[role.skill].digest }, systemInstructionDigest: systemSkill.digest, providerResponseIds: [result.providerResponseId].filter(Boolean), persistence: "json-event-store" } };
+  } catch (error) {
+    await mutateTask(taskId, current => {
+      ensureTaskState(current);
+      const invocation = current.agentInvocations.find(item => item.id === invocationId);
+      if (invocation) { invocation.status = "failed"; invocation.completedAt = new Date().toISOString(); invocation.failureNote = String(error.message || error).slice(0, 500); }
+      appendTaskEvent(current, "AgentFailed", { actor: role.name, agent: role.name, reason: String(error.message || error).slice(0, 500), payload: { invocationId, agent, status: "failed" } });
+      current.interactionState = "Dialogue/Explore";
+    });
+    throw error;
+  }
+}
+
 async function invokeCore(body, requestSignal = null) {
   if (!providerConfigured()) throw Object.assign(new Error("El runtime API está instalado, pero falta configurar un proveedor de inferencia."), { status: 503 });
   if (!systemSkill || !skills[roles.core.skill]) throw Object.assign(new Error("Falta el paquete de instrucciones de Eureka Multiverse 5.3 en el runtime."), { status: 503 });
@@ -589,8 +643,9 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "POST" && url.pathname === "/v1/invocations") {
     try {
       const body = await readJson(request);
-      if (body.agent !== "core") return json(response, 403, { error: "La API pública del runtime acepta solicitudes para EM Core; Core controla el routing de especialistas." });
-      return json(response, 200, await invokeCore(body, controller.signal));
+      if (!roles[body.agent]) return json(response, 400, { error: "Agente Eureka no válido." });
+      const result = body.agent === "core" ? await invokeCore(body, controller.signal) : await invokeSpecialist(body, controller.signal);
+      return json(response, 200, result);
     } catch (error) {
       if (request.aborted || response.destroyed) return;
       return json(response, error.status || 502, { error: error.message || "Falló la invocación de Eureka Runtime." });
