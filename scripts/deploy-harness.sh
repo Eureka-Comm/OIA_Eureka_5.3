@@ -4,7 +4,7 @@ cd /opt/eureka-chat
 available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
 if (( available < 800000 )); then echo "Se requieren al menos 800 MB de RAM disponible para activar el navegador junto al servicio actual. No se modificó el despliegue."; exit 1; fi
 if (( $(df -Pk /opt/eureka-chat | awk 'NR==2 {print $4}') < 6000000 )); then echo "Se requieren 6 GB libres para construir el navegador. No se modificó el despliegue."; exit 1; fi
-revision=f6ba9dd24c8aa89010a68feeae0d366cf82a604f
+revision=0e209d7769af6209ab39906eca424f84df04acd2
 stage="/home/deploy/eureka-harness-$revision"
 mkdir -p "$stage"
 files=(harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml)
