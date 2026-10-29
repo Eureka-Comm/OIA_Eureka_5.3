@@ -28,8 +28,8 @@ export function createHarness({infer,instructions,readJson,json}){
     feedback='\nCorrige esta versión usando los resultados reales del navegador. Documento anterior:\n'+draft.html+'\nResultados:\n'+JSON.stringify({...result,screenshot:undefined});
    }
    job.status=job.report.status==='passed'?'completed':'needs_revision';
-  }catch(e){job.status=controller.signal.aborted?'cancelled':'failed';job.error=String(e.message).slice(0,600)}
-  finally{job.completedAt=new Date().toISOString();await save(job);active=null;controllers.delete(job.id)}
+  }catch(e){job.status=controller.signal.aborted?(controller.signal.reason?.name==='TimeoutError'?'timed_out':'cancelled'):'failed';job.error=String(e.message).slice(0,600)}
+  finally{job.completedAt=new Date().toISOString();try{await save(job)}finally{active=null;controllers.delete(job.id)}}
  }
  return async(req,res,url)=>{
   if(!url.pathname.startsWith('/v1/harness/'))return false;
@@ -42,7 +42,7 @@ export function createHarness({infer,instructions,readJson,json}){
     active='reserving';
     let body;try{body=await readJson(req);if(typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>12000)throw Error('Describe la aplicación en hasta 12000 caracteres.')}catch(e){active=null;throw e}
     const job={id:randomUUID(),prompt:body.prompt,title:'Aplicación',status:'generating',createdAt:new Date().toISOString(),versions:[]};
-    const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),360000);
+    const controller=new AbortController();const timer=setTimeout(()=>controller.abort(new DOMException('La construcción excedió seis minutos.','TimeoutError')),360000);
     active=job.id;controllers.set(job.id,controller);
     try{await save(job)}catch(e){active=null;controllers.delete(job.id);clearTimeout(timer);throw e}
     json(res,202,{id:job.id,status:job.status});
