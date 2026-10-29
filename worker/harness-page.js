@@ -6,7 +6,7 @@ const page=String.raw`<!doctype html><html lang="es"><meta charset="utf-8"><meta
 <textarea id="prompt" placeholder="Por ejemplo: una calculadora de presupuestos con tres categorías y un resumen…"></textarea><div><button id="build">Crear aplicación</button><button id="stop" disabled>Detener</button><button id="download" hidden>Descargar HTML</button></div><p id="status" role="status"></p><iframe id="preview" title="Vista previa aislada" sandbox="allow-scripts" referrerpolicy="no-referrer" hidden></iframe><details><summary>Resultados de las pruebas</summary><pre id="report"></pre><img id="shot" alt="Captura del navegador de pruebas" hidden></details></main>
 <script>
 const $=id=>document.getElementById(id);let id=localStorage.getItem('eureka-harness-job'),html='',polling=false;
-async function appHistory(){try{const {jobs}=await api('jobs');$('appList').innerHTML=jobs.map(j=>'<div class="appRow"><button data-app="'+j.id+'">'+(j.pinned?'◆ ':'')+j.title+'</button><button title="Renombrar" data-rename="'+j.id+'">···</button></div>').join('')}catch{}}
+async function appHistory(){try{const {jobs}=await api('jobs');$('appList').innerHTML=jobs.map(j=>'<div class="appRow"><button data-app="'+j.id+'">'+(j.pinned?'◆ ':'')+j.title+'</button><button title="Fijar o desfijar" data-pin="'+j.id+'">'+(j.pinned?'◆':'◇')+'</button><button title="Renombrar" data-rename="'+j.id+'">···</button><button title="Eliminar" data-delete="'+j.id+'">×</button></div>').join('')}catch{}}
 $('newApp').onclick=()=>{id='';localStorage.removeItem('eureka-harness-job');$('preview').hidden=true;$('report').open=false;$('prompt').value='';status('Nueva aplicación');};
 async function api(path,options={}){const r=await fetch('/api/harness/'+path,{...options,headers:{'content-type':'application/json'},cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}
 function status(text){$('status').textContent=text}
@@ -36,7 +36,7 @@ if(id)poll();
 export async function harnessPage(request){
  const url=new URL(request.url);
  if(url.pathname==='/factory')return new Response(page,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
- if(!/^\/api\/harness\/jobs(?:\/[a-f0-9-]{36}(?:\/(?:html|screenshot|rename|pin|iterate))?)?$/.test(url.pathname))return null;
+ if(!/^\/api\/harness\/jobs(?:\/[a-f0-9-]{36}(?:\/(?:html|screenshot))?)?$/.test(url.pathname))return null;
  const reply=(body,status=200)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
  if(process.env.EUREKA_HARNESS_ENABLED!=='true')return reply({error:'Harness pendiente de activar en el servidor'},503);
  if(!['GET','POST','DELETE'].includes(request.method))return reply({error:'Método no admitido'},405);
