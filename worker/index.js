@@ -87,7 +87,13 @@ const html = String.raw`<!doctype html>
 }
 @media(max-width:760px){.sidebar-brand:hover{transform:none;box-shadow:0 2px 7px rgba(15,15,32,.16)}.logo-symbol{transform:none!important;transition:none}.logo-halo{display:none}.logo-cyan-glow{display:none}}@media(prefers-reduced-motion:reduce){.sidebar,.app *{transition-duration:.01ms!important;animation:none!important}.sidebar-brand,.logo-symbol,.logo-halo,.logo-cyan-glow{transition:none!important;animation:none!important;transform:none!important}.logo-symbol::after,.logo-cyan-glow{display:none!important}}
 </style>
-</head>
+<style id="sidebar-header-layout">
+#sidebar .sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0;padding:4px 0 16px;grid-template-columns:none}
+#sidebar .sidebar-head #eurekaLogo{flex:0 1 190px;width:190px;max-width:calc(100% - 42px);height:56px;min-width:0;margin:0;justify-content:flex-start}
+#sidebar .sidebar-head #eurekaLogo .aida-logo{display:block;width:100%;height:auto;max-height:56px;flex:none}
+#sidebar .sidebar-head #sidebarCollapse{flex:0 0 34px;width:34px;height:36px;margin-left:auto;padding:0;align-self:center;color:#51745e}
+#sidebar .sidebar-head #sidebarCollapse svg{width:22px;height:22px}
+</style></head>
 <body>
 <div class="app" id="app">
   <nav class="nav-rail" aria-label="Espacios"><a class="nav-rail-space" href="/?view=chat" title="Inicio" aria-label="Inicio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M9 21v-8h6v8"/></svg></a></nav>
