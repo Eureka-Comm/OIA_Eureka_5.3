@@ -37,6 +37,10 @@ export function createHarness({infer,instructions,readJson,json}){
   if(!process.env.EUREKA_HARNESS_URL){json(res,503,{error:'Harness no configurado'});return true}
   const match=url.pathname.match(/^\/v1\/harness\/jobs\/([a-f0-9-]{36})(?:\/(html|screenshot))?$/);
   try{
+   if(req.method==='GET'&&url.pathname==='/v1/harness/jobs'){const jobs=[];for(const n of await readdir(root)){if(!/^[a-f0-9-]{36}\\.json$/.test(n))continue;try{const j=await get(n.slice(0,-5));jobs.push({id:j.id,title:j.title,status:j.status,pinned:Boolean(j.pinned),createdAt:j.createdAt})}catch{}}jobs.sort((a,b)=>Number(b.pinned)-Number(a.pinned)||b.createdAt.localeCompare(a.createdAt));json(res,200,{jobs});return true}
+   const manage=url.pathname.match(/^\/v1\/harness\/jobs\/([a-f0-9-]{36})\/(rename|pin)$/);
+   if(manage&&req.method==='POST'){const j=await get(manage[1]),b=await readJson(req);if(manage[2]==='rename'){if(typeof b.title!=='string'||!b.title.trim())throw Error('Nombre vacío');j.title=b.title.trim().slice(0,100)}else j.pinned=b.pinned===true;j.updatedAt=new Date().toISOString();await save(j);json(res,200,{id:j.id,title:j.title,pinned:j.pinned});return true}
+   if(req.method==='DELETE'&&/^\/v1\/harness\/jobs\/[a-f0-9-]{36}$/.test(url.pathname)){const id=url.pathname.split('/').pop();controllers.get(id)?.abort();await (await import('node:fs/promises')).unlink(path(id));json(res,200,{deleted:true});return true}
    if(req.method==='POST'&&url.pathname==='/v1/harness/jobs'){
     if(active){json(res,429,{error:'Hay una construcción en curso; espera a que termine.'});return true}
     active='reserving';
