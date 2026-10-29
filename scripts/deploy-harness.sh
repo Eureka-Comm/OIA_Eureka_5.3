@@ -4,12 +4,12 @@ cd /opt/eureka-chat
 available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
 if (( available < 800000 )); then echo "Se requieren al menos 800 MB de RAM disponible para activar el navegador junto al servicio actual. No se modificó el despliegue."; exit 1; fi
 if (( $(df -Pk /opt/eureka-chat | awk 'NR==2 {print $4}') < 6000000 )); then echo "Se requieren 6 GB libres para construir el navegador. No se modificó el despliegue."; exit 1; fi
-revision=abef9e56ca26b37bca0f4acb1db9be188d5bcbe9
+revision=b5805e1979d3dc43f6ce74c41f90f7d10b24c0f6
 stage="/home/deploy/eureka-harness-$revision"
 mkdir -p "$stage"
-files=(harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/factory.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml)
+files=(harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml)
 for f in "${files[@]}"; do mkdir -p "$stage/$(dirname "$f")"; curl -fsSL "https://raw.githubusercontent.com/Eureka-Comm/OIA_Eureka_5.3/$revision/$f" -o "$stage/$f"; done
-for f in runtime/harness.mjs runtime/factory.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs harness/runner.mjs harness/browser.mjs; do
+for f in runtime/harness.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs harness/runner.mjs harness/browser.mjs; do
  docker run --rm --network none -v "$stage:/check:ro" --entrypoint node eureka-chat-app --check "/check/$f"
 done
 docker build -t eureka-browser:1 -f "$stage/harness/Dockerfile.browser" "$stage/harness"
@@ -23,7 +23,7 @@ docker run --rm --network none --user 0 -e "DEPLOY_UID=$(id -u)" -e "DEPLOY_GID=
 grep -Fqx '    env_file: .env' compose.yaml
 sed "s|^    env_file: \.env$|    env_file: $envfile|" compose.yaml > "$composefile"
 stamp=$(date +%Y%m%d-%H%M%S)
-docker run --rm --network none --user 0 -e "STAMP=$stamp" -v /opt/eureka-chat:/cfg:rw -v "$stage:/drop:ro" --entrypoint sh eureka-chat-app -c 'set -eu; for f in harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/factory.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml; do mkdir -p "/cfg/$(dirname "$f")"; if [ -f "/cfg/$f" ]; then cp -p "/cfg/$f" "/cfg/$f.backup-$STAMP"; fi; cp "/drop/$f" "/cfg/$f"; done'
+docker run --rm --network none --user 0 -e "STAMP=$stamp" -v /opt/eureka-chat:/cfg:rw -v "$stage:/drop:ro" --entrypoint sh eureka-chat-app -c 'set -eu; for f in harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml; do mkdir -p "/cfg/$(dirname "$f")"; if [ -f "/cfg/$f" ]; then cp -p "/cfg/$f" "/cfg/$f.backup-$STAMP"; fi; cp "/drop/$f" "/cfg/$f"; done'
 export COMPOSE_DISABLE_ENV_FILE=1
 compose=(docker compose --env-file "$envfile" --project-directory /opt/eureka-chat -p eureka-chat -f "$composefile" -f /opt/eureka-chat/compose.existing-caddy.yaml -f /opt/eureka-chat/compose.harness.yaml)
 rollback(){
