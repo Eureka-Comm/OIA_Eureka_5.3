@@ -90,7 +90,7 @@ const html = String.raw`<!doctype html>
 </head>
 <body>
 <div class="app" id="app">
-  <nav class="nav-rail" aria-label="Espacios"><a class="nav-rail-space" href="/?view=chat" title="Chat" aria-label="Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 3v-3a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h6"/></svg></a></nav>
+  <nav class="nav-rail" aria-label="Espacios"><a class="nav-rail-space" href="/?view=chat" title="Inicio" aria-label="Inicio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7"/><path d="M5 9v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M9 21v-8h6v8"/></svg></a></nav>
   <aside class="sidebar" id="sidebar" aria-label="Conversaciones">
     <div class="sidebar-head">
       <a class="sidebar-brand" id="eurekaLogo" href="#" aria-label="AIDA inicio"><span class="logo-halo" aria-hidden="true"></span><svg class="aida-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 246 72" role="img" aria-label="AIDA">
