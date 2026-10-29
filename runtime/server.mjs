@@ -1,3 +1,4 @@
+import { createHarness } from "./harness.mjs";
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -311,7 +312,7 @@ function chatCompletionText(payload) {
   return "";
 }
 
-async function infer(instructions, content, signal, outputSchema = null) {
+async function infer(instructions, content, signal, outputSchema = null, options = {}) {
   const url = process.env.MODEL_API_URL;
   if (!safeProviderUrl(url, process.env.MODEL_API_ALLOW_HTTP === "true")) throw Object.assign(new Error("MODEL_API_URL debe usar HTTPS, salvo host local configurado explícitamente para inferencia privada."), { status: 503 });
   const protocol = process.env.MODEL_API_PROTOCOL || "responses";
@@ -327,8 +328,8 @@ async function infer(instructions, content, signal, outputSchema = null) {
     return null;
   }).filter(Boolean);
   const requestBody = protocol === "chat_completions"
-    ? { model: process.env.MODEL_NAME, messages: chatCompletionMessages(instructions, providerContent), max_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
-    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }], max_output_tokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
+    ? { model: process.env.MODEL_NAME, messages: chatCompletionMessages(instructions, providerContent), max_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
+    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }], max_output_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
   if (outputSchema && new URL(url).hostname === "api.openai.com") {
     requestBody[protocol === "chat_completions" ? "response_format" : "text"] = protocol === "chat_completions"
       ? { type: "json_schema", json_schema: { name: "eureka_core_routing", strict: true, schema: outputSchema } }
@@ -558,6 +559,8 @@ async function invokeCore(body, requestSignal = null) {
   };
 }
 
+const harness = createHarness({ infer, instructions: instructionsFor, readJson, json });
+
 const server = http.createServer(async (request, response) => {
   const controller = new AbortController();
   request.on("aborted", () => controller.abort());
@@ -565,6 +568,7 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, service: "eureka-runtime-api" });
   if (!authorized(request)) return json(response, 401, { error: "Autenticación de runtime inválida." });
+  try { if (await harness(request, response, url)) return; } catch { return json(response, 503, {error: 'Harness no disponible.'}); }
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     const listed = capabilities();
     const core = listed.find(capability => capability.id === "core");
@@ -574,6 +578,7 @@ const server = http.createServer(async (request, response) => {
       skillsPackage: "eureka-multiverse-5-3@5.3.2",
       capabilities: listed,
       integrations: {
+        webHarness: process.env.EUREKA_HARNESS_URL ? "configured" : "unavailable",
         emFactoryMcp: "unavailable",
         mathematicalEngine: "unavailable",
         mathematicalEngineDetails: {
