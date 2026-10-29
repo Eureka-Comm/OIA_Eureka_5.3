@@ -475,7 +475,7 @@ async function invokeCore(body, requestSignal = null) {
   const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
   const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
   const planResult = await infer(
-    instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. No hay herramientas externas registradas en este runtime; no inventes llamadas a MCP, búsquedas, cálculos, acciones, estado persistente o permisos. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. Responde directamente con mode="direct" solo a preguntas sencillas, factuales o explicativas que no soliciten evaluación, comparación, recomendación, diseño, plan de solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración o construcción. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. No fuerces un flujo fijo. No invoques directamente herramientas ni afirmes que lo hiciste.`),
+    instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. No hay herramientas externas registradas en este runtime; no inventes llamadas a MCP, búsquedas, cálculos, acciones, estado persistente o permisos. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. Responde directamente con mode="direct" solo a preguntas sencillas, factuales o explicativas que no soliciten evaluación, comparación, recomendación, diseño, plan de solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración o construcción. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. Usa dependencias solo cuando realmente necesites un resultado anterior; permite trabajar en paralelo a los agentes independientes. No fuerces un flujo fijo. No invoques directamente herramientas ni afirmes que lo hiciste.`),
     content,
     inferenceSignal,
     corePlanSchema,
@@ -487,12 +487,10 @@ async function invokeCore(body, requestSignal = null) {
     return { invocationId: body.invocationId || crypto.randomUUID(), taskId, agent: "core", status: "completed", product: { text: plan.response }, text: plan.response, routedAgents: [], routingReason: plan.reason, trace: { taskId, formulationVersion: body.formulationVersion ?? null, skillVersion: "5.3.2", coreInstructionDigest: skills[roles.core.skill].digest, systemInstructionDigest: systemSkill.digest, providerResponseIds: [planResult.providerResponseId].filter(Boolean), persistence: "json-event-store" } };
   }
   const results = [];
-  const pending = new Set(plan.steps.map((_, index) => index));
-  while (pending.size) {
-    const ready = [...pending].filter(index => plan.steps[index].dependsOn.every(dependency => results[dependency]));
-    if (!ready.length) throw Object.assign(new Error("El grafo de subtareas de Core contiene una dependencia no resoluble."), { status: 502 });
-    const batch = await Promise.all(ready.map(async index => {
-      const step = plan.steps[index];
+  // Start each step as soon as its own dependencies finish, without batch barriers.
+  const executions = plan.steps.map((step, index) => Promise.resolve().then(async () => {
+      await Promise.all(step.dependsOn.map(dependency => executions[dependency]));
+      inferenceSignal.throwIfAborted();
       const role = roles[step.agent];
       if (!skills[role.skill]) throw Object.assign(new Error(`Falta la Skill versionada de ${role.name}.`), { status: 503 });
       const prior = step.dependsOn.map(dependency => results[dependency]).filter(Boolean).map(result => `### ${result.name}\n${result.text}`).join("\n\n");
@@ -500,13 +498,13 @@ async function invokeCore(body, requestSignal = null) {
       const invocationId = crypto.randomUUID();
       await mutateTask(taskId, current => {
         ensureTaskState(current);
-        const invocation = { id: invocationId, taskId, agent: role.name, requestedBy: "EM Core", reason: plan.reason, executionMode: ready.length > 1 ? "parallel" : "sequential", status: "running", provider: "eureka-runtime", inputRefs: [], formulationVersion: current.currentFormulationVersion || null, requestedAt: new Date().toISOString(), startedAt: new Date().toISOString(), capabilityVersion: "5.3.2" };
+        const invocation = { id: invocationId, taskId, agent: role.name, requestedBy: "EM Core", reason: plan.reason, executionMode: step.dependsOn.length ? "dependency-driven" : "parallel", status: "running", provider: "eureka-runtime", inputRefs: [], formulationVersion: current.currentFormulationVersion || null, requestedAt: new Date().toISOString(), startedAt: new Date().toISOString(), capabilityVersion: "5.3.2" };
         current.agentInvocations.push(invocation);
         appendTaskEvent(current, "AgentInvoked", { actor: "EM Core", agent: role.name, reason: plan.reason, formulationVersion: invocation.formulationVersion || undefined, payload: { invocationId, agent: role.name, reason: plan.reason, status: "running", dependsOn: step.dependsOn } });
       });
       let result;
       try {
-        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones.`), taskContent, inferenceSignal);
+        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`), taskContent, inferenceSignal);
       } catch (error) {
         await mutateTask(taskId, current => {
           ensureTaskState(current);
@@ -522,10 +520,10 @@ async function invokeCore(body, requestSignal = null) {
         if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; }
         appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, formulationVersion: invocation?.formulationVersion || undefined, payload: { invocationId, agent: role.name, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
       });
-      return { index, value: { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId } };
+      results[index] = { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId };
+      return results[index];
     }));
-    for (const { index, value } of batch) { results[index] = value; pending.delete(index); }
-  }
+  await Promise.all(executions);
   const specialistResults = results;
   const synthesisInput = [{ type: "input_text", text: `Solicitud original:\n${task}\n\nMotivo del routing de EM Core:\n${plan.reason}\n\nContribuciones de especialistas:\n${specialistResults.map(result => `### ${result.name}\n${result.text}`).join("\n\n")}` }];
   const synthesis = await infer(
