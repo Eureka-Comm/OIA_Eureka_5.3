@@ -1,0 +1,29 @@
+services:
+  app:
+    environment:
+      EUREKA_HARNESS_ENABLED: "true"
+  runtime:
+    environment:
+      EUREKA_HARNESS_URL: http://harness:3100
+      EUREKA_HARNESS_DIR: /app/data/harness
+  harness:
+    build:
+      context: ./harness
+      dockerfile: Dockerfile.runner
+    restart: unless-stopped
+    environment:
+      EUREKA_RUNTIME_API_TOKEN: ${EUREKA_RUNTIME_API_TOKEN:?required}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - runtime_internal
+    mem_limit: 128m
+    cpus: 0.25
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health',{headers:{authorization:'Bearer '+process.env.EUREKA_RUNTIME_API_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
