@@ -36,7 +36,7 @@ if(id)poll();
 export async function harnessPage(request){
  const url=new URL(request.url);
  if(url.pathname==='/factory')return new Response(page,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
- if(!/^\/api\/harness\/jobs(?:\/[a-f0-9-]{36}(?:\/(?:html|screenshot))?)?$/.test(url.pathname))return null;
+ if(!/^\/api\/harness\/jobs(?:\/[a-f0-9-]{36}(?:\/(?:html|screenshot|rename|pin|iterate))?)?$/.test(url.pathname))return null;
  const reply=(body,status=200)=>Response.json(body,{status,headers:{'cache-control':'no-store'}});
  if(process.env.EUREKA_HARNESS_ENABLED!=='true')return reply({error:'Harness pendiente de activar en el servidor'},503);
  if(!['GET','POST','DELETE'].includes(request.method))return reply({error:'Método no admitido'},405);
