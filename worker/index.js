@@ -131,7 +131,7 @@ const html = String.raw`<!doctype html>
 </svg></a>
       <button class="sidebar-collapse" id="sidebarCollapse" type="button" aria-label="Ocultar menú" title="Ocultar menú"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
     </div>
-    <button class="new-chat-row" id="newChat" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg><span>Nuevo chat</span></button>
+    <button class="new-chat-row" id="newChat" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg><span>Nuevo chat</span></button><a href="/factory" style="display:block;padding:10px 14px;color:inherit;text-decoration:none;font-size:13px">Crear aplicación</a>
     <label class="sidebar-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.2 4.2"/></svg><input id="historySearch" type="search" placeholder="Buscar conversaciones" autocomplete="off" aria-label="Buscar conversaciones"></label>
     <div class="sidebar-scroll">
       <section class="conversation-section" id="pinnedSection" hidden><h2>Fijados</h2><div class="conversation-list" id="pinnedList"></div></section>
