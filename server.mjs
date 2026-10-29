@@ -1,3 +1,4 @@
+import { harnessPage } from "./worker/harness-page.js";
 import http from "node:http";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -104,7 +105,7 @@ const server = http.createServer(async (incoming, outgoing) => {
     const init = { method, headers, signal: controller.signal };
     if (method !== "GET" && method !== "HEAD" && body.length) init.body = new Uint8Array(body);
     const request = new Request(`${protocol}://${host}${incoming.url || "/"}`, init);
-    const response = await worker.fetch(request, env);
+    const response = await harnessPage(request) || await worker.fetch(request, env);
     outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     outgoing.end(Buffer.from(await response.arrayBuffer()));
   } catch (error) {
