@@ -1,4 +1,5 @@
 import { createHarness } from "./harness.mjs";
+import { createFactory } from "./factory.mjs";
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -560,6 +561,7 @@ async function invokeCore(body, requestSignal = null) {
 }
 
 const harness = createHarness({ infer, instructions: instructionsFor, readJson, json });
+const factory = createFactory({ readJson, json });
 
 const server = http.createServer(async (request, response) => {
   const controller = new AbortController();
@@ -569,6 +571,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/health") return json(response, 200, { ok: true, service: "eureka-runtime-api" });
   if (!authorized(request)) return json(response, 401, { error: "Autenticación de runtime inválida." });
   try { if (await harness(request, response, url)) return; } catch { return json(response, 503, {error: 'Harness no disponible.'}); }
+  try { if (await factory(request, response, url)) return; } catch { return json(response, 503, { error: "Factory no disponible." }); }
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     const listed = capabilities();
     const core = listed.find(capability => capability.id === "core");
@@ -579,7 +582,8 @@ const server = http.createServer(async (request, response) => {
       capabilities: listed,
       integrations: {
         webHarness: process.env.EUREKA_HARNESS_URL ? "configured" : "unavailable",
-        emFactoryMcp: "unavailable",
+        emFactoryMcp: process.env.EM_FACTORY_MCP_URL ? "configured" : "unavailable",
+        eurekaFactoryApi: "available",
         mathematicalEngine: "unavailable",
         mathematicalEngineDetails: {
           status: "pending_integration_validation",
