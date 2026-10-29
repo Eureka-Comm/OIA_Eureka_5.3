@@ -4,7 +4,7 @@ cd /opt/eureka-chat
 available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
 if (( available < 800000 )); then echo "Se requieren al menos 800 MB de RAM disponible para activar el navegador junto al servicio actual. No se modificó el despliegue."; exit 1; fi
 if (( $(df -Pk /opt/eureka-chat | awk 'NR==2 {print $4}') < 6000000 )); then echo "Se requieren 6 GB libres para construir el navegador. No se modificó el despliegue."; exit 1; fi
-revision=9a5385fb9b418fe34a593cc95440a6be062cf365
+revision=ee5f4bc548aea028ea328ac5f9d6d898e6d84bc0
 stage="/home/deploy/eureka-harness-$revision"
 mkdir -p "$stage"
 files=(harness/Dockerfile.runner harness/Dockerfile.browser harness/runner.mjs harness/browser.mjs harness/README.md harness/integration.test.mjs runtime/harness.mjs runtime/server.mjs worker/harness-page.js worker/index.js server.mjs compose.harness.yaml)
@@ -28,7 +28,7 @@ export COMPOSE_DISABLE_ENV_FILE=1
 compose=(docker compose --env-file "$envfile" --project-directory /opt/eureka-chat -p eureka-chat -f "$composefile" -f /opt/eureka-chat/compose.existing-caddy.yaml -f /opt/eureka-chat/compose.harness.yaml)
 rollback(){
  echo "Restaurando los servicios anteriores..."
- docker run --rm --network none --user 0 -e "STAMP=$stamp" -v /opt/eureka-chat:/cfg:rw --entrypoint sh eureka-chat-app -c 'set -eu; for f in runtime/server.mjs worker/index.js server.mjs; do cp -p "/cfg/$f.backup-$STAMP" "/cfg/$f"; done'
+ docker run --rm --network none --user 0 -e "STAMP=$stamp" -v /opt/eureka-chat:/cfg:rw --entrypoint sh eureka-chat-app -c 'set -eu; for f in runtime/harness.mjs worker/harness-page.js runtime/server.mjs worker/index.js server.mjs; do cp -p "/cfg/$f.backup-$STAMP" "/cfg/$f"; done'
  "${compose[@]}" stop harness || true
  docker compose --env-file "$envfile" --project-directory /opt/eureka-chat -p eureka-chat -f "$composefile" -f /opt/eureka-chat/compose.existing-caddy.yaml up -d --no-deps --build runtime app
 }
@@ -38,7 +38,7 @@ for i in $(seq 1 45); do
  r=$(docker inspect -f '{{.State.Health.Status}}' eureka-chat-runtime-1 2>/dev/null || true)
  h=$(docker inspect -f '{{.State.Health.Status}}' eureka-chat-harness-1 2>/dev/null || true)
  if [[ "$a" == healthy && "$r" == healthy && "$h" == healthy ]]; then
-  echo "Harness instalado. Abre https://143.198.230.30/factory"
+  echo "Chat actualizado. Aplicaciones se encuentra dentro del menú del chat: https://143.198.230.30/"
   echo "Respaldo: *.backup-$stamp. Conserva compose.harness.yaml en futuros despliegues."
   exit 0
  fi
