@@ -76,7 +76,7 @@ const fs=require("node:fs");
 const dest="/cfg/index.js", backup=dest+".backup-v2-"+process.env.BACKUP_STAMP;
 fs.copyFileSync(backup,dest); fs.chmodSync(dest,0o644);
 '
-  "\${compose[@]}" up -d --no-deps --build app || true
+  "${compose[@]}" up -d --no-deps --build app || true
   exit 1
 fi
 
@@ -122,33 +122,62 @@ block=block.replace(fallback[0],route+fallback[0]);
 source=source.slice(0,site.start)+block+source.slice(site.end);
 const stamp=process.env.BACKUP_STAMP, backup=`${file}.backup-v2-${stamp}`;
 fs.copyFileSync(file,backup); fs.chmodSync(backup,0o600);
-const temp=file+".new"; fs.writeFileSync(temp,source,{mode:fs.statSync(file).mode&0o777}); fs.renameSync(temp,file);
+// Caddy mounts this as an individual file. Write in place so the mount keeps
+// observing updates; replacing the inode with rename leaves the container stale.
+fs.writeFileSync(file,source,{mode:fs.statSync(file).mode&0o777});
 console.log(`Ruta /v2 preparada. Respaldo protegido: Caddyfile.backup-v2-${stamp}`);
 '
 
-if ! docker exec eureka-caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
-  echo "Caddy validation failed; restoring its previous configuration."
+restore_caddy() {
+  echo "Restaurando la configuración Caddy respaldada..."
   docker run --rm --network none --user 0 -e "BACKUP_STAMP=$stamp" \
     -v /opt/eureka/caddy:/cfg:rw --entrypoint node eureka-chat-app -e '
 const fs=require("node:fs"); const file="/cfg/Caddyfile";
-fs.copyFileSync(`${file}.backup-v2-${process.env.BACKUP_STAMP}`,file);
+const backup=`${file}.backup-v2-${process.env.BACKUP_STAMP}`;
+fs.writeFileSync(file,fs.readFileSync(backup),{mode:fs.statSync(file).mode&0o777});
 '
-  exit 1
-fi
-if ! docker exec eureka-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
-  echo "Caddy reload failed; restoring its previous configuration."
-  docker run --rm --network none --user 0 -e "BACKUP_STAMP=$stamp" \
-    -v /opt/eureka/caddy:/cfg:rw --entrypoint node eureka-chat-app -e '
-const fs=require("node:fs"); const file="/cfg/Caddyfile";
-fs.copyFileSync(`${file}.backup-v2-${process.env.BACKUP_STAMP}`,file);
-'
-  docker exec eureka-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || true
+  docker compose --project-directory /opt/eureka -f /opt/eureka/docker-compose.yml \
+    -p eureka up -d --no-deps --force-recreate caddy || true
+}
+
+caddy_image=$(docker inspect --format '{{.Config.Image}}' eureka-caddy)
+if ! docker run --rm --network none \
+  -v /opt/eureka/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  --entrypoint caddy "$caddy_image" validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+  echo "Host Caddyfile validation failed."
+  restore_caddy
   exit 1
 fi
 
-printf 'DeepSeek raíz: '
-curl -k -sS -o /dev/null -w 'HTTP %{http_code}\n' https://eurekamultiverse.ai/
-printf 'Chat OpenAI /v2 (401 significa que la protección Basic Auth respondió): '
-curl -k -sS -o /dev/null -w 'HTTP %{http_code}\n' https://eurekamultiverse.ai/v2/
+# Previous deployments atomically replaced this single-file bind mount. If its
+# container view differs from the host, recreate only Caddy to remount the file.
+host_hash=$(sha256sum /opt/eureka/caddy/Caddyfile | awk '{print $1}')
+container_hash=$(docker exec eureka-caddy sh -c 'sha256sum /etc/caddy/Caddyfile' | awk '{print $1}')
+if [ "$host_hash" != "$container_hash" ]; then
+  echo "Actualizando el montaje individual de Caddy recreando solo el proxy..."
+  if ! docker compose --project-directory /opt/eureka -f /opt/eureka/docker-compose.yml \
+    -p eureka up -d --no-deps --force-recreate caddy; then
+    restore_caddy
+    exit 1
+  fi
+fi
+
+if ! docker exec eureka-caddy grep -Fq '# EUREKA_OPENAI_V2_BEGIN' /etc/caddy/Caddyfile ||
+   ! docker exec eureka-caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile ||
+   ! docker exec eureka-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+  echo "La ruta /v2 no quedó cargada en el contenedor Caddy."
+  restore_caddy
+  exit 1
+fi
+
+root_status=$(curl -q -k -sS -o /dev/null -w '%{http_code}' https://eurekamultiverse.ai/)
+v2_status=$(curl -q -k -sS -o /dev/null -w '%{http_code}' https://eurekamultiverse.ai/v2/)
+printf 'DeepSeek raíz: HTTP %s\n' "$root_status"
+printf 'Chat OpenAI /v2 sin credenciales: HTTP %s\n' "$v2_status"
+if [ "$root_status" != 200 ] || [ "$v2_status" != 401 ]; then
+  echo "La verificación de enrutamiento falló; restauro Caddy."
+  restore_caddy
+  exit 1
+fi
 echo "Despliegue /v2 aplicado. Worker backup: worker/index.js.backup-v2-$stamp"
 
