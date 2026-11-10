@@ -226,6 +226,11 @@ const html = String.raw`<!doctype html>
   </section>
 </div>
 <script>
+// El chat OpenAI puede vivir en /v2 aunque su servidor continúe sirviendo desde /.
+// Caddy elimina ese prefijo antes de reenviar las solicitudes al contenedor.
+const appBasePath=/^\/v2(?:\/|$)/.test(location.pathname)?'/v2':'';
+const nativeFetch=window.fetch.bind(window);
+function fetch(resource,options){if(typeof resource==='string'&&resource.startsWith('/api/'))resource=appBasePath+resource;return nativeFetch(resource,options)}
 const roleNames={core:'EM Core',structurer:'EM Structurer',descriptor:'EM Descriptor',predictor:'EM Predictor',prescriptor:'EM Prescriptor',actioner:'EM Actioner',installer:'EM Installer',publisher:'EM Publisher'};
 const roleLanes={core:'Coordina la solicitud y enruta a especialistas cuando corresponde.',structurer:'Formula el problema, sus objetivos y límites.',descriptor:'Describe estado, datos, relaciones y evidencia.',predictor:'Analiza escenarios, consecuencias e incertidumbre.',prescriptor:'Compara alternativas, objetivos y trade-offs.',actioner:'Prepara pasos verificables para decisiones autorizadas.',installer:'Diseña capacidades y planes de implementación.',publisher:'Presenta conocimiento validado para una audiencia.'};
 let selectedAgent=localStorage.getItem('eurekaSelectedAgent')||'core';let factoryMcpConnected=false;
