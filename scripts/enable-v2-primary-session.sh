@@ -18,7 +18,7 @@ const route=`# EUREKA_OPENAI_V2_BEGIN
         route {
             @unsafe_origin {
                 not method GET HEAD OPTIONS
-                not header Origin https://eurekamultiverse.ai https://www.eurekamultiverse.ai
+                not header_regexp Origin ^https://(www[.])?eurekamultiverse[.]ai$
             }
             respond @unsafe_origin "Origen no autorizado" 403
             @document {
