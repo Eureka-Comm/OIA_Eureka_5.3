@@ -27,19 +27,15 @@ const route=`# EUREKA_OPENAI_V2_BEGIN
                 not path /api/*
             }
             handle @document {
-                reverse_proxy frontend:80 {
-                    method GET
-                    rewrite /api/auth/me
+                forward_auth frontend:80 {
+                    uri /api/auth/me
                     header_up -Authorization
-                    @valid status 200
-                    handle_response @valid {
-                        reverse_proxy eureka-chat:3000
-                    }
                     @login status 401 403
                     handle_response @login {
                         redir /login 303
                     }
                 }
+                reverse_proxy eureka-chat:3000
             }
             handle {
                 forward_auth frontend:80 {
