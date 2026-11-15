@@ -52,19 +52,19 @@ const factoryResourcesSchema = {
     type: "object", additionalProperties: false,
     required: ["name", "problem", "outcome", "stage", "resources", "missingCapabilities"],
     properties: {
-      name: { type: "string", minLength: 1, maxLength: 48, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", description: "Identificador ASCII en minúsculas y kebab-case; sin espacios ni acentos." }, problem: { type: "string" }, outcome: { type: "string" },
+      name: { type: "string", minLength: 1, maxLength: 48, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", description: "Identificador ASCII en minúsculas y kebab-case; sin espacios ni acentos." }, problem: { type: "string", maxLength: 1200 }, outcome: { type: "string", maxLength: 1200 },
       stage: { type: "string", enum: ["understand", "analyze", "decide", "act", "install", "learn"] },
-      missingCapabilities: { type: "array", items: { type: "string" } },
-      resources: { type: "array", items: {
+      missingCapabilities: { type: "array", maxItems: 8, items: { type: "string", maxLength: 240 } },
+      resources: { type: "array", maxItems: 3, items: {
         type: "object", additionalProperties: false,
         required: ["path", "kind", "content", "purpose", "owner", "acceptance", "evidence"],
         properties: {
-          path: { type: "string" },
+          path: { type: "string", maxLength: 120 },
           kind: { type: "string", enum: ["document", "code", "data", "test", "interface", "configuration"] },
-          content: { type: "string" }, purpose: { type: "string" },
+          content: { type: "string", maxLength: 2000 }, purpose: { type: "string", maxLength: 240 },
           owner: { type: "string", enum: ["EM Core", "EM Structurer", "EM Descriptor", "EM Predictor", "EM Prescriptor", "EM Actioner", "EM Installer", "EM Publisher"] },
-          acceptance: { type: "array", items: { type: "string" } },
-          evidence: { type: ["string", "null"] },
+          acceptance: { type: "array", maxItems: 4, items: { type: "string", maxLength: 240 } },
+          evidence: { type: ["string", "null"], maxLength: 500 },
         },
       } },
     },
@@ -424,7 +424,7 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
     else conversation.push({ type: "function_call_output", call_id: call.id, output });
   };
   for (let turn = 0; turn < 5; turn++) {
-    const result = await infer(instructions, content, signal, null, { tools, conversation });
+    const factoryGuidance = "\n\nPara factory_build_resources, devuelve argumentos JSON compactos y válidos, sin Markdown: nombre ASCII kebab-case; máximo 3 recursos textuales; máximo 2000 caracteres por content, 4 criterios breves por recurso y missingCapabilities=[] cuando no haya brechas verificadas. No copies Skills ni repitas la solicitud en los recursos. Haz una sola llamada de preparación.";\n    const result = await infer(instructions + factoryGuidance, content, signal, null, { tools, conversation, maxOutputTokens: 5000 });
     if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
     if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls, factoryArtifacts };
     if (turn === 4) throw Object.assign(new Error("EM Installer alcanzó el límite de rondas de herramientas de Factory."), { status: 502 });
