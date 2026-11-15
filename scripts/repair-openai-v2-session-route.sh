@@ -8,7 +8,7 @@ set -Eeuo pipefail
 FILE=/opt/eureka/caddy/Caddyfile
 STAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP="$FILE.backup-v2-session-$STAMP"
-CANDIDATE="/tmp/Caddyfile-v2-session-$STAMP"
+CANDIDATE="$FILE.v2-session-$STAMP"
 IMAGE=$(docker inspect --format '{{.Config.Image}}' eureka-chat-app-1)
 
 test -s "$FILE"
