@@ -440,9 +440,13 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
         }
       }
       if (call.name === "factory_build_resources" && Array.isArray(args.workspace?.missingCapabilities)) {
-        args.workspace.missingCapabilities = args.workspace.missingCapabilities
-          .map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
-        normalizedFields.push("workspace.missingCapabilities");
+        let normalized = false;
+        args.workspace.missingCapabilities = args.workspace.missingCapabilities.map(item => {
+          if (typeof item === "string") return item;
+          normalized = true;
+          return JSON.stringify(item);
+        });
+        if (normalized) normalizedFields.push("workspace.missingCapabilities[]");
       }
 
       const record = { id: crypto.randomUUID(), name: call.name, status: "running", startedAt: new Date().toISOString() };
@@ -749,7 +753,7 @@ async function invokeCore(body, requestSignal = null) {
         });
       }
       try {
-        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Si llamas factory_build_resources, los argumentos deben ser un objeto JSON válido conforme al esquema: workspace con name, problem, outcome, stage, resources y missingCapabilities como cadenas de texto; cada resource usa path, kind, content, purpose, owner, acceptance como lista y evidence como cadena de texto. Usa stage=install. Si la herramienta rechaza argumentos, corrígelos y vuelve a intentarlo dentro de la misma secuencia. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
+        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Si llamas factory_build_resources, los argumentos deben ser un objeto JSON válido conforme al esquema: workspace con name, problem, outcome, stage, resources y missingCapabilities como lista de cadenas; cada resource usa path, kind, content, purpose, owner, acceptance como lista y evidence como cadena de texto. Usa stage=install. Si la herramienta rechaza argumentos, corrígelos y vuelve a intentarlo dentro de la misma secuencia. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
         result = step.agent === "installer" && factoryConnection
           ? await inferInstallerWithFactory(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal, factoryConnection, taskId, invocationId)
           : await infer(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal);
