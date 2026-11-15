@@ -8,7 +8,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 APP_DIR=/opt/eureka-chat
-REV=a39bedc80c665ebdc5d741a842f2093d1fa14933
+REV=6fb0c97b3d2feabf103d7b34798d027ba17d2c0c
 STAMP=$(date +%Y%m%d-%H%M%S)
 RELEASE="$APP_DIR/releases/factory-$STAMP"
 SOURCE="$RELEASE/source"
