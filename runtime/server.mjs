@@ -424,7 +424,8 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
     else conversation.push({ type: "function_call_output", call_id: call.id, output });
   };
   for (let turn = 0; turn < 5; turn++) {
-    const factoryGuidance = "\n\nPara factory_build_resources, devuelve argumentos JSON compactos y válidos, sin Markdown: nombre ASCII kebab-case; máximo 3 recursos textuales; máximo 2000 caracteres por content, 4 criterios breves por recurso y missingCapabilities=[] cuando no haya brechas verificadas. No copies Skills ni repitas la solicitud en los recursos. Haz una sola llamada de preparación.";\n    const result = await infer(instructions + factoryGuidance, content, signal, null, { tools, conversation, maxOutputTokens: 5000 });
+    const factoryGuidance = "\n\nPara factory_build_resources, devuelve argumentos JSON compactos y válidos, sin Markdown: nombre ASCII kebab-case; máximo 3 recursos textuales; máximo 2000 caracteres por content, 4 criterios breves por recurso y missingCapabilities=[] cuando no haya brechas verificadas. No copies Skills ni repitas la solicitud en los recursos. Haz una sola llamada de preparación.";
+    const result = await infer(instructions + factoryGuidance, content, signal, null, { tools, conversation, maxOutputTokens: 5000 });
     if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
     if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls, factoryArtifacts };
     if (turn === 4) throw Object.assign(new Error("EM Installer alcanzó el límite de rondas de herramientas de Factory."), { status: 502 });
