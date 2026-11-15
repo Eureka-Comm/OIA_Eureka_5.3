@@ -46,6 +46,30 @@ const corePlanSchema = {
   },
   required: ["mode", "reason", "response", "steps"],
 };
+const factoryResourcesSchema = {
+  type: "object", additionalProperties: false, required: ["workspace"],
+  properties: { workspace: {
+    type: "object", additionalProperties: false,
+    required: ["name", "problem", "outcome", "stage", "resources", "missingCapabilities"],
+    properties: {
+      name: { type: "string" }, problem: { type: "string" }, outcome: { type: "string" },
+      stage: { type: "string", enum: ["understand", "analyze", "decide", "act", "install", "learn"] },
+      missingCapabilities: { type: "array", items: { type: "string" } },
+      resources: { type: "array", items: {
+        type: "object", additionalProperties: false,
+        required: ["path", "kind", "content", "purpose", "owner", "acceptance", "evidence"],
+        properties: {
+          path: { type: "string" },
+          kind: { type: "string", enum: ["document", "code", "data", "test", "interface", "configuration"] },
+          content: { type: "string" }, purpose: { type: "string" },
+          owner: { type: "string", enum: ["EM Core", "EM Structurer", "EM Descriptor", "EM Predictor", "EM Prescriptor", "EM Actioner", "EM Installer", "EM Publisher"] },
+          acceptance: { type: "array", items: { type: "string" } },
+          evidence: { type: ["string", "null"] },
+        },
+      } },
+    },
+  } },
+};
 const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), "skills");
 const dataFile = process.env.EUREKA_RUNTIME_DATA_FILE || join(dirname(fileURLToPath(import.meta.url)), "runtime-data.json");
 let writeQueue = Promise.resolve();
@@ -342,8 +366,8 @@ async function infer(instructions, content, signal, outputSchema = null, options
     : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }, ...(options.conversation || [])], max_output_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
   if (Array.isArray(options.tools) && options.tools.length) {
     requestBody.tools = protocol === "chat_completions"
-      ? options.tools.map(tool => ({ type: "function", function: { name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false } }))
-      : options.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false }));
+      ? options.tools.map(tool => ({ type: "function", function: { name: tool.name, description: tool.description || "", parameters: tool.modelInputSchema || tool.inputSchema, strict: tool.strict === true } }))
+      : options.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description || "", parameters: tool.modelInputSchema || tool.inputSchema, strict: tool.strict === true }));
     requestBody.tool_choice = "auto";
   }
   if (outputSchema && new URL(url).hostname === "api.openai.com") {
@@ -374,7 +398,8 @@ async function infer(instructions, content, signal, outputSchema = null, options
 
 async function inferInstallerWithFactory(instructions, content, signal, connection, taskId, invocationId) {
   if (!connection) return infer(instructions, content, signal);
-  const tools = connection.tools.filter(tool => FACTORY_TOOLS.includes(tool.name) && tool.name !== "factory_build_plugin");
+  const tools = connection.tools.filter(tool => FACTORY_TOOLS.includes(tool.name) && tool.name !== "factory_build_plugin")
+    .map(tool => tool.name === "factory_build_resources" ? { ...tool, strict: true, modelInputSchema: factoryResourcesSchema } : tool);
   if (!tools.length) return infer(instructions + "\n\nEM Factory no anunció herramientas permitidas para esta tarea. No afirmes que se generaron recursos.", content, signal);
 
   const conversation = [];
