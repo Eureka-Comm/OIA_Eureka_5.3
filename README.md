@@ -11,8 +11,8 @@ Interfaz para conversar con el runtime de agentes de Eureka Multiverse. Se ejecu
 - La API pública de Eureka está protegida con claves Bearer separadas del token interno app↔runtime. Se crean, listan y revocan en el VPS con `docker compose exec app node scripts/eureka-api-keys.mjs ...`; el servidor guarda solo hashes.
 - Los adjuntos se pueden enviar con cualquier extensión; el runtime conectado determina cuáles puede interpretar.
 - El chat requiere que el runtime confirme EM Core como capacidad disponible. No devuelve respuestas simuladas.
-- El runtime de Eureka incluye un adaptador de inferencia para Responses API y Chat Completions. Puede usar un proveedor remoto o Ollama local en Docker. El modelo ejecuta las Skills versionadas; Eureka es el pipeline, no el nombre del proveedor. El modelo aún debe configurarse y descargarse en el VPS. También falta conectar las herramientas MCP de EM Factory y el motor matemático determinista.
-- EM Factory y el motor matemático continúan pendientes de sus propios adaptadores y conexiones verificables.
+- El runtime de Eureka incluye un adaptador MCP de EM Factory para Streamable HTTP. Cuando el endpoint y ambos tokens se configuran y la negociación más `factory_status` responde, las herramientas permitidas se ofrecen únicamente a EM Installer; sus llamadas quedan en la traza de la tarea. Sin credenciales válidas, Factory permanece como no disponible.
+- El motor matemático determinista sigue pendiente de su propio adaptador y validación.
 - El renderizador de subpáginas no crea aplicaciones ni gráficas por sí mismo. Solo puede servir artefactos reales integrados por el runtime.
 
 El paquete puede versionarse en GitHub para revisión, pero preparar Docker no significa que el producto esté listo para producción. El VPS requiere credenciales de inferencia, validación integral y completar los gates de arquitectura que apliquen.
@@ -156,7 +156,10 @@ Abre `https://<IP-publica-del-Droplet>` e inicia sesión con el usuario y contra
 - `MODEL_API_URL`, `MODEL_API_PROTOCOL`, `MODEL_API_KEY`, `MODEL_NAME`: endpoint, protocolo, credencial y modelo del proveedor. Para Ollama se puede omitir la clave con `MODEL_API_AUTH_MODE=none`.
 - `EUREKA_RUNTIME_API_TOKEN`: secreto interno compartido únicamente por la interfaz y el runtime dentro de Docker.
 - El contrato HTTP de la interfaz está documentado en [`runtime/openapi.yaml`](runtime/openapi.yaml); el detalle del event store y del paquete de Skills está en [`runtime/README.md`](runtime/README.md).
-- `EM_FACTORY_MCP_URL`, `EM_FACTORY_OAUTH_TOKEN`: reservados para un adaptador MCP autenticado; tenerlos definidos no valida conexión.
+- `EM_FACTORY_MCP_URL`: endpoint MCP del puente web de EM Factory.
+- `EM_FACTORY_AUTH_MODE=sites_bypass`, `EM_FACTORY_SITES_BYPASS_TOKEN`, `EM_FACTORY_SERVICE_TOKEN`: autenticación servidor a servidor del puente Sites. Los dos tokens se guardan solo en el `.env` privado del runtime; no en Git, la interfaz ni el navegador.
+- `EM_FACTORY_MCP_TOKEN`: alternativa para modo `bearer` cuando el servidor MCP use un token Bearer único.
+- `EM_FACTORY_MCP_ALLOW_HTTP`: se mantiene desactivado para producción; HTTP solo se acepta para un servicio interno local declarado explícitamente.
 - `MATH_ENGINE_URL`: reservado para el motor matemático; aún no implementado.
 - `EUREKA_DATA_DIR`: persistencia local para tareas y artefactos; el runtime comparte el volumen `/app/data` y guarda su event store en `runtime.json`.
 

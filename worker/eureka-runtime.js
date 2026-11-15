@@ -1,4 +1,5 @@
 const agentIds = ["core", "structurer", "descriptor", "predictor", "prescriptor", "actioner", "installer", "publisher"];
+const factoryToolNames = new Set(["factory_status", "factory_open", "factory_build_resources", "factory_present_context"]);
 
 function configured(env) {
   return Boolean(env.EUREKA_RUNTIME_CAPABILITIES_URL && env.EUREKA_RUNTIME_INVOKE_URL && env.EUREKA_RUNTIME_API_TOKEN);
@@ -17,11 +18,12 @@ export async function readEurekaCapabilities(env) {
       connected: false,
       reason: "Configura las URL de capacidades e invocación y el token del runtime de Eureka en el servidor.",
       capabilities: agentIds.map(id => ({ id, status: "unavailable", reason: "Runtime de Eureka no conectado" })),
+      integrations: {},
     };
   }
   const allowHttp = env.EUREKA_RUNTIME_ALLOW_HTTP === "true";
   if (!validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, allowHttp) || !validateUrl(env.EUREKA_RUNTIME_INVOKE_URL, allowHttp)) {
-    return { connected: false, reason: "El runtime de Eureka requiere HTTPS, salvo localhost durante desarrollo.", capabilities: [] };
+    return { connected: false, reason: "El runtime de Eureka requiere HTTPS, salvo localhost durante desarrollo.", capabilities: [], integrations: {} };
   }
   let response;
   try {
@@ -31,14 +33,47 @@ export async function readEurekaCapabilities(env) {
       cache: "no-store",
     });
   } catch (error) {
-    return { connected: false, reason: `No se pudo contactar al runtime de Eureka: ${String(error.message || error).slice(0, 240)}`, capabilities: [] };
+    return { connected: false, reason: `No se pudo contactar al runtime de Eureka: ${String(error.message || error).slice(0, 240)}`, capabilities: [], integrations: {} };
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload || !Array.isArray(payload.capabilities)) {
-    return { connected: false, reason: `El API de capacidades no devolvió el contrato esperado (HTTP ${response.status}).`, capabilities: [] };
+    return { connected: false, reason: `El API de capacidades no devolvió el contrato esperado (HTTP ${response.status}).`, capabilities: [], integrations: {} };
   }
   const coreAvailable = payload.capabilities.some(item => item.id === "core" && item.status === "available");
-  return { connected: coreAvailable, reason: coreAvailable ? null : (payload.reason || "El runtime respondió, pero EM Core no está disponible. Configura el proveedor de inferencia."), capabilities: payload.capabilities };
+  return { connected: coreAvailable, reason: coreAvailable ? null : (payload.reason || "El runtime respondió, pero EM Core no está disponible. Configura el proveedor de inferencia."), capabilities: payload.capabilities, integrations: payload.integrations || {} };
+}
+
+function factoryRuntimeUrl(env, suffix) {
+  if (!configured(env) || !validateUrl(env.EUREKA_RUNTIME_CAPABILITIES_URL, env.EUREKA_RUNTIME_ALLOW_HTTP === "true")) return null;
+  const target = new URL(env.EUREKA_RUNTIME_CAPABILITIES_URL);
+  if (!target.pathname.endsWith("/v1/capabilities")) return null;
+  target.pathname = target.pathname.replace(/\/v1\/capabilities\/?$/, `/v1/factory/${suffix}`);
+  target.search = "";
+  target.hash = "";
+  return target;
+}
+
+export async function requestFactoryStatus(env) {
+  const target = factoryRuntimeUrl(env, "status");
+  if (!target) return { status: 503, body: { status: "unavailable", connected: false, reason: "El runtime de Eureka no está disponible para consultar EM Factory." } };
+  try {
+    const response = await fetch(target, { headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, accept: "application/json" }, signal: AbortSignal.timeout(10000), cache: "no-store" });
+    return { status: response.status, body: await response.json().catch(() => ({ status: "degraded", connected: false, reason: "Respuesta inválida del runtime." })) };
+  } catch (error) { return { status: 502, body: { status: "degraded", connected: false, reason: `No se pudo consultar EM Factory: ${String(error.message || error).slice(0, 200)}` } }; }
+}
+
+export async function invokeFactoryTool(name, args, env, request) {
+  if (!factoryToolNames.has(name)) return { status: 404, body: { error: "Herramienta Factory no disponible en esta ruta." } };
+  if (!args || typeof args !== "object" || Array.isArray(args)) return { status: 400, body: { error: "Los argumentos deben ser un objeto JSON." } };
+  const target = factoryRuntimeUrl(env, `tools/${name}`);
+  if (!target) return { status: 503, body: { error: "El runtime de Eureka no está disponible para EM Factory." } };
+  try {
+    const response = await fetch(target, { method: "POST", headers: { authorization: `Bearer ${env.EUREKA_RUNTIME_API_TOKEN}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(args), signal: request.signal ? AbortSignal.any([request.signal, AbortSignal.timeout(40000)]) : AbortSignal.timeout(40000) });
+    return { status: response.status, body: await response.json().catch(() => ({ error: "Respuesta inválida del runtime." })) };
+  } catch (error) {
+    if (request.signal?.aborted) return { status: 499, body: { error: "La solicitud fue detenida." } };
+    return { status: 502, body: { error: `No se pudo invocar EM Factory: ${String(error.message || error).slice(0, 200)}` } };
+  }
 }
 
 export async function invokeEurekaAgent(request, env) {

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { FACTORY_TOOLS, callFactoryTool, connectFactory, closeFactory, getFactoryConfigStatus, readFactoryStatus } from "../factory-mcp.js";
 
 const port = Number(process.env.PORT || 3001);
 const maxBodyBytes = 52 * 1024 * 1024;
@@ -239,6 +240,17 @@ function capabilities() {
   }));
 }
 
+function factoryEnvironment() {
+  return {
+    EM_FACTORY_MCP_URL: process.env.EM_FACTORY_MCP_URL,
+    EM_FACTORY_AUTH_MODE: process.env.EM_FACTORY_AUTH_MODE,
+    EM_FACTORY_MCP_TOKEN: process.env.EM_FACTORY_MCP_TOKEN,
+    EM_FACTORY_SITES_BYPASS_TOKEN: process.env.EM_FACTORY_SITES_BYPASS_TOKEN,
+    EM_FACTORY_SERVICE_TOKEN: process.env.EM_FACTORY_SERVICE_TOKEN,
+    EM_FACTORY_MCP_ALLOW_HTTP: process.env.EM_FACTORY_MCP_ALLOW_HTTP,
+  };
+}
+
 function instructionsFor(skillId, adapterInstructions) {
   const bundle = [systemSkill?.text, skills[skillId]?.text].filter(Boolean).join("\n\n---\n\n");
   return `${bundle}\n\n## Adaptador de ejecución HTTP\n${adapterInstructions}\n\nLas Skills definen la cognición y propiedad del trabajo. El adaptador añade el formato de transporte; no las reemplaza.`;
@@ -328,8 +340,14 @@ async function infer(instructions, content, signal, outputSchema = null, options
     return null;
   }).filter(Boolean);
   const requestBody = protocol === "chat_completions"
-    ? { model: process.env.MODEL_NAME, messages: chatCompletionMessages(instructions, providerContent), max_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
-    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }], max_output_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
+    ? { model: process.env.MODEL_NAME, messages: [...chatCompletionMessages(instructions, providerContent), ...(options.conversation || [])], max_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
+    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }, ...(options.conversation || [])], max_output_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
+  if (Array.isArray(options.tools) && options.tools.length) {
+    requestBody.tools = protocol === "chat_completions"
+      ? options.tools.map(tool => ({ type: "function", function: { name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false } }))
+      : options.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false }));
+    requestBody.tool_choice = "auto";
+  }
   if (outputSchema && new URL(url).hostname === "api.openai.com") {
     requestBody[protocol === "chat_completions" ? "response_format" : "text"] = protocol === "chat_completions"
       ? { type: "json_schema", json_schema: { name: "eureka_core_routing", strict: true, schema: outputSchema } }
@@ -349,8 +367,68 @@ async function infer(instructions, content, signal, outputSchema = null, options
     throw Object.assign(new Error(`El proveedor de inferencia no completó la solicitud (HTTP ${response.status})${detail ? `: ${detail}` : ""}.`), { status: 502 });
   }
   const text = protocol === "chat_completions" ? chatCompletionText(payload) : responseText(payload);
-  if (!text) throw Object.assign(new Error("El proveedor de inferencia devolvió una respuesta vacía."), { status: 502 });
-  return { text, providerResponseId: typeof payload.id === "string" ? payload.id : null };
+  const toolCalls = protocol === "chat_completions"
+    ? (payload.choices?.[0]?.message?.tool_calls || []).map(call => ({ id: call.id, name: call.function?.name, arguments: call.function?.arguments, raw: call }))
+    : (payload.output || []).filter(item => item.type === "function_call").map(call => ({ id: call.call_id || call.id, name: call.name, arguments: call.arguments, raw: call }));
+  if (!text && !toolCalls.length) throw Object.assign(new Error("El proveedor de inferencia devolvió una respuesta vacía."), { status: 502 });
+  return { text, toolCalls, providerResponseId: typeof payload.id === "string" ? payload.id : null };
+}
+
+async function inferInstallerWithFactory(instructions, content, signal, connection, taskId, invocationId) {
+  if (!connection) return infer(instructions, content, signal);
+  const tools = connection.tools.filter(tool => FACTORY_TOOLS.includes(tool.name) && tool.name !== "factory_build_plugin");
+  if (!tools.length) return infer(instructions + "\n\nEM Factory no anunció herramientas permitidas para esta tarea. No afirmes que se generaron recursos.", content, signal);
+
+  const conversation = [];
+  const factoryToolCalls = [];
+  const providerResponseIds = [];
+  const protocol = process.env.MODEL_API_PROTOCOL || "responses";
+  for (let turn = 0; turn < 5; turn++) {
+    const result = await infer(instructions, content, signal, null, { tools, conversation });
+    if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
+    if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls };
+    if (turn === 4) throw Object.assign(new Error("EM Installer alcanzó el límite de rondas de herramientas de Factory."), { status: 502 });
+
+    if (protocol === "chat_completions") conversation.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls.map(call => call.raw) });
+    else for (const call of result.toolCalls) conversation.push(call.raw);
+
+    for (const call of result.toolCalls) {
+      const definition = tools.find(tool => tool.name === call.name);
+      if (!definition) throw Object.assign(new Error("El proveedor solicitó una herramienta Factory fuera de la lista permitida."), { status: 403 });
+      let args;
+      try { args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : call.arguments; }
+      catch { throw Object.assign(new Error(`EM Installer produjo argumentos JSON inválidos para ${call.name}.`), { status: 502 }); }
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw Object.assign(new Error(`Los argumentos de ${call.name} deben ser un objeto JSON.`), { status: 502 });
+
+      const record = { id: crypto.randomUUID(), name: call.name, status: "running", startedAt: new Date().toISOString() };
+      factoryToolCalls.push(record);
+      await mutateTask(taskId, current => {
+        const invocation = current.agentInvocations.find(item => item.id === invocationId);
+        if (invocation) { invocation.factoryToolCalls ||= []; invocation.factoryToolCalls.push(record); }
+        appendTaskEvent(current, "FactoryToolInvoked", { actor: "EM Installer", tool: call.name, payload: { invocationId, factoryInvocationId: record.id, status: "running" } });
+      });
+      let toolResult;
+      try { toolResult = await connection.client.callTool({ name: call.name, arguments: args }, { signal: connection.signal, toolDefinition: definition }); }
+      catch (error) {
+        record.status = "failed";
+        record.completedAt = new Date().toISOString();
+        record.failureNote = String(error?.message || error).slice(0, 400);
+        await mutateTask(taskId, current => appendTaskEvent(current, "FactoryToolFailed", { actor: "EM Installer", tool: call.name, reason: record.failureNote, payload: { invocationId, factoryInvocationId: record.id, status: "failed" } }));
+        throw Object.assign(new Error(`EM Factory no completó ${call.name}: ${record.failureNote}`), { status: 502 });
+      }
+      const serialized = JSON.stringify(toolResult).slice(0, 72000);
+      record.status = toolResult?.isError ? "failed" : "completed";
+      record.completedAt = new Date().toISOString();
+      if (toolResult?.isError) record.failureNote = "EM Factory informó un error de herramienta.";
+      await mutateTask(taskId, current => appendTaskEvent(current, toolResult?.isError ? "FactoryToolFailed" : "FactoryToolCompleted", {
+        actor: "EM Installer", tool: call.name,
+        payload: { invocationId, factoryInvocationId: record.id, status: record.status, resultDigest: createHash("sha256").update(serialized).digest("hex") },
+      }));
+      if (protocol === "chat_completions") conversation.push({ role: "tool", tool_call_id: call.id, content: serialized });
+      else conversation.push({ type: "function_call_output", call_id: call.id, output: serialized });
+    }
+  }
+  throw Object.assign(new Error("EM Installer no completó la secuencia de herramientas Factory."), { status: 502 });
 }
 
 function parsePlan(text) {
@@ -476,7 +554,7 @@ async function invokeCore(body, requestSignal = null) {
   const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
   const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
   const planResult = await infer(
-    instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. No hay herramientas externas registradas en este runtime; no inventes llamadas a MCP, búsquedas, cálculos, acciones, estado persistente o permisos. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. Responde directamente con mode="direct" solo a preguntas sencillas, factuales o explicativas que no soliciten evaluación, comparación, recomendación, diseño, plan de solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración o construcción. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. Usa dependencias solo cuando realmente necesites un resultado anterior; permite trabajar en paralelo a los agentes independientes. No fuerces un flujo fijo. No invoques directamente herramientas ni afirmes que lo hiciste.`),
+    instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. Durante el routing, EM Core no llama herramientas directamente ni afirma que lo hizo. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. Responde directamente con mode="direct" solo a preguntas sencillas, factuales o explicativas que no soliciten evaluación, comparación, recomendación, diseño, plan de solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración, construcción de aplicación o preparación de recursos que Factory pueda aportar. Si asignas una tarea pertinente a Installer, este runtime puede ofrecerle herramientas MCP verificadas de EM Factory; solo Installer las usará y reportará los resultados observados. No afirmes uso de Factory en la respuesta de routing. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. Usa dependencias solo cuando realmente necesites un resultado anterior; permite trabajar en paralelo a los agentes independientes. No fuerces un flujo fijo.`),
     content,
     inferenceSignal,
     corePlanSchema,
@@ -504,8 +582,28 @@ async function invokeCore(body, requestSignal = null) {
         appendTaskEvent(current, "AgentInvoked", { actor: "EM Core", agent: role.name, reason: plan.reason, formulationVersion: invocation.formulationVersion || undefined, payload: { invocationId, agent: role.name, reason: plan.reason, status: "running", dependsOn: step.dependsOn } });
       });
       let result;
+      let factoryConnection = null;
+      let factoryConnectionFailure = "";
+      if (step.agent === "installer") {
+        const factoryConfig = getFactoryConfigStatus(factoryEnvironment());
+        if (factoryConfig.configured) {
+          try { factoryConnection = await connectFactory(factoryEnvironment(), inferenceSignal, Number(process.env.MODEL_TIMEOUT_MS || 120000)); }
+          catch (error) { factoryConnectionFailure = String(error.message || error).slice(0, 300); }
+        } else factoryConnectionFailure = factoryConfig.reason;
+        await mutateTask(taskId, current => {
+          const invocation = current.agentInvocations.find(item => item.id === invocationId);
+          if (invocation) {
+            invocation.factoryMcpStatus = factoryConnection ? "available" : "unavailable";
+            if (factoryConnectionFailure) invocation.factoryMcpReason = factoryConnectionFailure;
+          }
+          appendTaskEvent(current, "FactoryConnectionChecked", { actor: "EM Installer", payload: { invocationId, status: factoryConnection ? "available" : "unavailable", reason: factoryConnectionFailure || undefined } });
+        });
+      }
       try {
-        result = await infer(instructionsFor(role.skill, `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. El runtime no tiene herramientas externas registradas: no simules resultados de tools ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`), taskContent, inferenceSignal);
+        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
+        result = step.agent === "installer" && factoryConnection
+          ? await inferInstallerWithFactory(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal, factoryConnection, taskId, invocationId)
+          : await infer(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal);
       } catch (error) {
         await mutateTask(taskId, current => {
           ensureTaskState(current);
@@ -514,14 +612,14 @@ async function invokeCore(body, requestSignal = null) {
           appendTaskEvent(current, "AgentFailed", { actor: role.name, agent: role.name, reason: String(error.message || error).slice(0, 500), payload: { invocationId, agent: role.name, status: "failed" } });
         });
         throw error;
-      }
+      } finally { await closeFactory(factoryConnection); }
       await mutateTask(taskId, current => {
         ensureTaskState(current);
         const invocation = current.agentInvocations.find(item => item.id === invocationId);
-        if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; }
+        if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; if (result.factoryToolCalls?.length) invocation.factoryToolCalls = result.factoryToolCalls; }
         appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, formulationVersion: invocation?.formulationVersion || undefined, payload: { invocationId, agent: role.name, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
       });
-      results[index] = { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId };
+      results[index] = { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId, factoryToolCalls: result.factoryToolCalls || [] };
       return results[index];
     }));
   await Promise.all(executions);
@@ -554,7 +652,8 @@ async function invokeCore(body, requestSignal = null) {
       coreInstructionDigest: skills[roles.core.skill].digest,
       systemInstructionDigest: systemSkill.digest,
       specialistInstructionDigests: Object.fromEntries(specialistResults.map(result => [result.id, skills[roles[result.id].skill].digest])),
-      note: "Se ejecutaron Skills 5.3.2 empaquetadas. La tarea y eventos se guardan en un event store JSON; las herramientas MCP no están registradas en este runtime.",
+      factoryToolCalls: specialistResults.flatMap(result => result.factoryToolCalls.map(call => ({ agent: result.id, name: call.name, status: call.status }))),
+      note: "Se ejecutaron Skills 5.3.2 empaquetadas. Las herramientas MCP de EM Factory solo se ofrecen a EM Installer cuando la conexión se valida; las llamadas registran su resultado en los eventos de la tarea.",
     },
   };
 }
@@ -572,6 +671,7 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     const listed = capabilities();
     const core = listed.find(capability => capability.id === "core");
+    const factoryStatus = await readFactoryStatus(factoryEnvironment(), { timeoutMs: 8000 });
     return json(response, 200, {
       service: "eureka-runtime-api",
       runtimeVersion: "0.3.0",
@@ -579,7 +679,8 @@ const server = http.createServer(async (request, response) => {
       capabilities: listed,
       integrations: {
         webHarness: process.env.EUREKA_HARNESS_URL ? "configured" : "unavailable",
-        emFactoryMcp: "unavailable",
+        emFactoryMcp: factoryStatus.connected ? "available" : factoryStatus.status,
+        emFactoryMcpDetails: factoryStatus,
         mathematicalEngine: "unavailable",
         mathematicalEngineDetails: {
           status: "pending_integration_validation",
@@ -600,6 +701,21 @@ const server = http.createServer(async (request, response) => {
       },
       ...(core?.status === "unavailable" ? { reason: core.reason } : {}),
     });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/factory/status") {
+    const factoryStatus = await readFactoryStatus(factoryEnvironment(), { signal: controller.signal, timeoutMs: 8000 });
+    return json(response, factoryStatus.connected ? 200 : 503, factoryStatus);
+  }
+  const factoryToolRoute = url.pathname.match(/^\/v1\/factory\/tools\/([a-z_]{1,64})$/);
+  if (request.method === "POST" && factoryToolRoute) {
+    const name = factoryToolRoute[1];
+    if (!FACTORY_TOOLS.includes(name) || name === "factory_build_plugin") return json(response, 404, { error: "Herramienta Factory no disponible en esta ruta." });
+    try {
+      const args = await readJson(request);
+      return json(response, 200, await callFactoryTool(factoryEnvironment(), name, args, { signal: controller.signal, timeoutMs: 30000 }));
+    } catch (error) {
+      return json(response, error.status || 502, { error: error.message || "Falló la llamada a EM Factory.", code: error.code || "FACTORY_CALL_FAILED" });
+    }
   }
   const feedbackRoute = url.pathname.match(/^\/v1\/tasks\/([A-Za-z0-9_-]{1,128})\/feedback$/);
   if (request.method === "POST" && feedbackRoute) {

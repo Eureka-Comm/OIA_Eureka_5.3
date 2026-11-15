@@ -1,5 +1,5 @@
 import { integrateApplication, renderApplicationPage } from "./applications.js";
-import { createEurekaTask, deleteEurekaTask, invokeEurekaAgent, proposeEurekaFormulation, readEurekaCapabilities, requestEurekaTask, reviewEurekaFormulation, submitEurekaFeedback } from "./eureka-runtime.js";
+import { createEurekaTask, deleteEurekaTask, invokeEurekaAgent, invokeFactoryTool, proposeEurekaFormulation, readEurekaCapabilities, requestEurekaTask, requestFactoryStatus, reviewEurekaFormulation, submitEurekaFeedback } from "./eureka-runtime.js";
 
 const roles = {
   core: { name: "EM Core", lane: "Orquestación adaptativa y gobierno. Integra resultados, determina el agente pertinente y comunica límites." },
@@ -422,7 +422,18 @@ export default { async fetch(request, env) {
   }
   if (url.pathname === "/api/status" && request.method === "GET") {
     const eurekaRuntime = await readEurekaCapabilities(env);
-    return json({ eurekaRuntimeConnected: eurekaRuntime.connected, eurekaRuntimeReason: eurekaRuntime.reason, eurekaCapabilities: eurekaRuntime.capabilities.map(({ id, status, version }) => ({ id, status, version })), factoryConfigured: Boolean(env.EM_FACTORY_MCP_URL && env.EM_FACTORY_OAUTH_TOKEN), factoryMcpConnected: false, factoryMcpReason: "El servidor web todavía no implementa un adaptador MCP validado para EM Factory; URL/token no equivalen a una conexión.", mathEngineConfigured: Boolean(env.MATH_ENGINE_URL), applicationRenderer: true });
+    const factory = eurekaRuntime.integrations?.emFactoryMcpDetails || {};
+    return json({ eurekaRuntimeConnected: eurekaRuntime.connected, eurekaRuntimeReason: eurekaRuntime.reason, eurekaCapabilities: eurekaRuntime.capabilities.map(({ id, status, version }) => ({ id, status, version })), factoryConfigured: Boolean(factory.configured), factoryMcpConnected: Boolean(factory.connected), factoryMcpReason: factory.reason || (factory.connected ? "EM Factory respondió a la negociación MCP y a factory_status." : "EM Factory no confirmó una conexión MCP."), factoryTools: Array.isArray(factory.tools) ? factory.tools.map(({ name }) => name) : [], mathEngineConfigured: Boolean(env.MATH_ENGINE_URL), applicationRenderer: true });
+  }
+  if (url.pathname === "/api/factory/status" && request.method === "GET") {
+    const result = await requestFactoryStatus(env);
+    return json(result.body, result.status);
+  }
+  const factoryToolRoute = url.pathname.match(/^\/api\/factory\/tools\/([a-z_]{1,64})$/);
+  if (factoryToolRoute && request.method === "POST") {
+    let args; try { args = await request.json(); } catch { return json({ error: "Se esperaba un cuerpo JSON." }, 400); }
+    const result = await invokeFactoryTool(factoryToolRoute[1], args, env, request);
+    return json(result.body, result.status);
   }
   if (url.pathname === "/api/reviewer" && request.method === "GET") {
     const configured = env.EUREKA_ZERO_REVIEW_USERNAME || "";

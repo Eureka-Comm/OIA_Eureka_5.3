@@ -1,8 +1,10 @@
 FROM node:24-alpine
 ENV NODE_ENV=production PORT=3000
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY server.mjs ./
+COPY factory-mcp.js ./
 COPY worker ./worker
 COPY runtime ./runtime
 COPY scripts ./scripts

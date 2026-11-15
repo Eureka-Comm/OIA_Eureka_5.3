@@ -6,5 +6,8 @@
   "scripts": {
     "start": "node server.mjs",
     "build": "node scripts/build.mjs && node scripts/validate-artifact.mjs && node --check runtime/server.mjs && node --check server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
   }
 }
