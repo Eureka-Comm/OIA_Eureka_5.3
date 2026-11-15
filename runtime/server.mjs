@@ -10,6 +10,7 @@ import { FACTORY_TOOLS, callFactoryTool, connectFactory, closeFactory, getFactor
 const port = Number(process.env.PORT || 3001);
 const maxBodyBytes = 52 * 1024 * 1024;
 const taskIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
+const maxFactoryHandoffBytes = 256 * 1024;
 const roles = {
   core: { name: "EM Core", skill: "em-core-5-3", owner: "Eureka-0" },
   structurer: { name: "EM Structurer", skill: "em-structurer-5-3", owner: "EM Structurer" },
@@ -378,12 +379,13 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
 
   const conversation = [];
   const factoryToolCalls = [];
+  const factoryArtifacts = [];
   const providerResponseIds = [];
   const protocol = process.env.MODEL_API_PROTOCOL || "responses";
   for (let turn = 0; turn < 5; turn++) {
     const result = await infer(instructions, content, signal, null, { tools, conversation });
     if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
-    if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls };
+    if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls, factoryArtifacts };
     if (turn === 4) throw Object.assign(new Error("EM Installer alcanzó el límite de rondas de herramientas de Factory."), { status: 502 });
 
     if (protocol === "chat_completions") conversation.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls.map(call => call.raw) });
@@ -417,15 +419,119 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
       record.status = toolResult?.isError ? "failed" : "completed";
       record.completedAt = new Date().toISOString();
       if (toolResult?.isError) record.failureNote = "EM Factory informó un error de herramienta.";
+      if (!toolResult?.isError && call.name === "factory_build_resources") {
+        const factoryContent = Array.isArray(toolResult.content) ? toolResult.content : [];
+        const text = factoryContent
+          .filter(item => item?.type === "text" && typeof item.text === "string")
+          .map(item => item.text)
+          .join("\n\n");
+        const resources = factoryContent
+          .filter(item => item?.type === "resource" && typeof item.resource?.text === "string")
+          .map(item => ({ uri: item.resource.uri, mimeType: item.resource.mimeType, text: item.resource.text }));
+        const handoff = JSON.stringify({
+          structuredContent: toolResult.structuredContent ?? null,
+          text,
+          resources,
+        });
+        if (Buffer.byteLength(handoff, "utf8") > maxFactoryHandoffBytes) {
+          record.handoffStatus = "rejected_too_large";
+          record.handoffFailure = "El paquete textual excede el límite seguro de transferencia de 256 KiB.";
+          await mutateTask(taskId, current => appendTaskEvent(current, "FactoryResourcesHandoffFailed", {
+            actor: "EM Installer",
+            tool: call.name,
+            reason: record.handoffFailure,
+            payload: { invocationId, factoryInvocationId: record.id, status: record.handoffStatus },
+          }));
+        } else if (text || resources.length || toolResult.structuredContent) {
+          const artifactId = crypto.randomUUID();
+          const digest = createHash("sha256").update(handoff).digest("hex");
+          record.resourceArtifactId = artifactId;
+          record.handoffStatus = "ready";
+          factoryArtifacts.push({ id: artifactId, digest, byteLength: Buffer.byteLength(handoff, "utf8"), tool: call.name, factoryInvocationId: record.id, installerInvocationId: invocationId });
+          await mutateTask(taskId, current => {
+            current.factoryArtifacts ||= [];
+            current.factoryArtifacts.push({
+              id: artifactId,
+              taskId,
+              sourceInvocationId: invocationId,
+              factoryInvocationId: record.id,
+              tool: call.name,
+              createdAt: record.completedAt,
+              digest,
+              byteLength: Buffer.byteLength(handoff, "utf8"),
+              content: handoff,
+            });
+            current.factoryArtifacts = current.factoryArtifacts.slice(-20);
+            appendTaskEvent(current, "FactoryResourcesPrepared", {
+              actor: "EM Installer",
+              tool: call.name,
+              payload: { invocationId, factoryInvocationId: record.id, artifactId, digest, byteLength: Buffer.byteLength(handoff, "utf8") },
+            });
+          });
+        } else {
+          record.handoffStatus = "empty";
+          record.handoffFailure = "Factory no devolvió contenido textual ni estructurado transferible al Harness.";
+          await mutateTask(taskId, current => appendTaskEvent(current, "FactoryResourcesHandoffFailed", {
+            actor: "EM Installer",
+            tool: call.name,
+            reason: record.handoffFailure,
+            payload: { invocationId, factoryInvocationId: record.id, status: record.handoffStatus },
+          }));
+        }
+      }
       await mutateTask(taskId, current => appendTaskEvent(current, toolResult?.isError ? "FactoryToolFailed" : "FactoryToolCompleted", {
         actor: "EM Installer", tool: call.name,
-        payload: { invocationId, factoryInvocationId: record.id, status: record.status, resultDigest: createHash("sha256").update(serialized).digest("hex") },
+        payload: { invocationId, factoryInvocationId: record.id, status: record.status, resultDigest: createHash("sha256").update(serialized).digest("hex"), resourceArtifactId: record.resourceArtifactId || undefined, handoffStatus: record.handoffStatus || undefined },
       }));
       if (protocol === "chat_completions") conversation.push({ role: "tool", tool_call_id: call.id, content: serialized });
       else conversation.push({ type: "function_call_output", call_id: call.id, output: serialized });
     }
   }
   throw Object.assign(new Error("EM Installer no completó la secuencia de herramientas Factory."), { status: 502 });
+}
+
+async function prepareApplicationWithEureka({ taskId, jobId, prompt, signal }) {
+  const before = await getTask(taskId);
+  const priorInvocationIds = new Set((before?.agentInvocations || []).map(item => item.id));
+  const priorArtifactIds = new Set((before?.factoryArtifacts || []).map(item => item.id));
+  const coordination = await invokeCore({
+    agent: "core",
+    taskId,
+    task: prompt,
+    input: [{
+      type: "input_text",
+      text: "Eureka-0 solicita preparar una aplicación para el Harness. Coordina el trabajo con EM Installer. Para esta solicitud, prepara con EM Factory un paquete textual pertinente (requisitos, datos de ejemplo claramente identificados, criterios de aceptación, interfaz y pruebas) usando factory_build_resources. No inventes resultados: si Factory, Installer o el traspaso no están disponibles, informa el bloqueo. El Harness recibirá los recursos devueltos y generará y probará una aplicación aislada; no afirmes que ya se ejecutó.",
+    }],
+  }, signal);
+  const task = await getTask(taskId);
+  const installerInvocations = (task?.agentInvocations || []).filter(item => item.agent === "EM Installer" && !priorInvocationIds.has(item.id));
+  const resourceArtifacts = (task?.factoryArtifacts || []).filter(item => !priorArtifactIds.has(item.id));
+  if (!installerInvocations.length) throw Object.assign(new Error("EM Core no delegó la preparación de la aplicación a EM Installer; el Harness no inició una generación sin esa etapa."), { status: 502 });
+  const latestInstaller = [...installerInvocations].reverse().find(item => item.status === "completed" && resourceArtifacts.some(artifact => artifact.sourceInvocationId === item.id));
+  const artifacts = latestInstaller ? resourceArtifacts.filter(item => item.sourceInvocationId === latestInstaller.id) : [];
+  if (!latestInstaller || !artifacts.length) {
+    throw Object.assign(new Error("La preparación no completó el traspaso de recursos de EM Factory desde EM Installer. Revisa la traza de la tarea antes de generar la aplicación."), { status: 502 });
+  }
+  const resources = artifacts.map(item => ({ id: item.id, digest: item.digest, content: item.content }));
+  const resourceContext = resources.map(item => `Factory resource ${item.id} · SHA-256 ${item.digest}\n${item.content}`).join("\n\n");
+  await mutateTask(taskId, current => appendTaskEvent(current, "HarnessResourcesReceived", {
+    actor: "Harness",
+    payload: { jobId, artifacts: artifacts.map(({ id, digest, byteLength, tool }) => ({ id, digest, byteLength, tool })), status: "received" },
+  }));
+  return {
+    resourceContext,
+    trace: {
+      taskId,
+      harnessJobId: jobId,
+      coreInvocationId: coordination.invocationId,
+      coreSummary: coordination.text,
+      routedAgents: coordination.routedAgents,
+      installerInvocationIds: installerInvocations.map(item => item.id),
+      factoryToolCalls: (latestInstaller.factoryToolCalls || []).map(({ id, name, status, resourceArtifactId, handoffStatus }) => ({ factoryInvocationId: id, name, status, resourceArtifactId, handoffStatus })),
+      factoryArtifacts: artifacts.map(({ id, digest, byteLength, tool, factoryInvocationId, sourceInvocationId }) => ({ id, digest, byteLength, tool, factoryInvocationId, installerInvocationId: sourceInvocationId })),
+      handoff: "received_by_harness",
+    },
+  };
 }
 
 function parsePlan(text) {
@@ -616,7 +722,7 @@ async function invokeCore(body, requestSignal = null) {
         if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; if (result.factoryToolCalls?.length) invocation.factoryToolCalls = result.factoryToolCalls; }
         appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, formulationVersion: invocation?.formulationVersion || undefined, payload: { invocationId, agent: role.name, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
       });
-      results[index] = { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId, factoryToolCalls: result.factoryToolCalls || [] };
+      results[index] = { id: step.agent, name: role.name, task: step.task, text: result.text, providerResponseId: result.providerResponseId, factoryToolCalls: result.factoryToolCalls || [], factoryArtifacts: result.factoryArtifacts || [] };
       return results[index];
     }));
   await Promise.all(executions);
@@ -650,12 +756,13 @@ async function invokeCore(body, requestSignal = null) {
       systemInstructionDigest: systemSkill.digest,
       specialistInstructionDigests: Object.fromEntries(specialistResults.map(result => [result.id, skills[roles[result.id].skill].digest])),
       factoryToolCalls: specialistResults.flatMap(result => result.factoryToolCalls.map(call => ({ agent: result.id, name: call.name, status: call.status }))),
+      factoryArtifacts: specialistResults.flatMap(result => result.factoryArtifacts.map(artifact => ({ agent: result.id, ...artifact }))),
       note: "Se ejecutaron Skills 5.3.2 empaquetadas. Las herramientas MCP de EM Factory solo se ofrecen a EM Installer cuando la conexión se valida; las llamadas registran su resultado en los eventos de la tarea.",
     },
   };
 }
 
-const harness = createHarness({ infer, instructions: instructionsFor, readJson, json });
+const harness = createHarness({ infer, instructions: instructionsFor, readJson, json, prepareTask: prepareApplicationWithEureka });
 
 const server = http.createServer(async (request, response) => {
   const controller = new AbortController();

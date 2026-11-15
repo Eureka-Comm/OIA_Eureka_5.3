@@ -1,23 +1,32 @@
 import {mkdir,readFile,writeFile,rename,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-export function createHarness({infer,instructions,readJson,json}){
+export function createHarness({infer,instructions,readJson,json,prepareTask}){
  const root=process.env.EUREKA_HARNESS_DIR||'/app/data/harness';
  let active=null;
  const controllers=new Map();
  const path=id=>join(root,id+'.json');
  const save=async job=>{await mkdir(root,{recursive:true});await writeFile(path(job.id)+'.tmp',JSON.stringify(job),{mode:0o600});await rename(path(job.id)+'.tmp',path(job.id))};
  const get=async id=>JSON.parse(await readFile(path(id),'utf8'));
- const initialized=(async()=>{await mkdir(root,{recursive:true});for(const name of await readdir(root)){if(!/^[a-f0-9-]{36}\.json$/.test(name))continue;const job=await get(name.slice(0,-5));if(['generating','testing'].includes(job.status)){job.status='interrupted';job.error='El runtime se reinició; crea una nueva versión.';await save(job)}}})();
+ const initialized=(async()=>{await mkdir(root,{recursive:true});for(const name of await readdir(root)){if(!/^[a-f0-9-]{36}\.json$/.test(name))continue;const job=await get(name.slice(0,-5));if(['preparing','generating','testing'].includes(job.status)){job.status='interrupted';job.error='El runtime se reinició; crea una nueva versión.';await save(job)}}})();
  const schema={type:'object',additionalProperties:false,properties:{title:{type:'string'},html:{type:'string'},tests:{type:'array',items:{type:'object',additionalProperties:false,properties:{action:{type:'string',enum:['click','fill','visible']},selector:{type:'string'},value:{type:'string'}},required:['action','selector','value']}}},required:['title','html','tests']};
  async function execute(job,controller){
   try{
    let feedback='';
+   let generationPrompt=job.prompt;
+   if(typeof prepareTask==='function'){
+    job.status='preparing';job.preparationStatus='EM Core está coordinando EM Installer y EM Factory…';await save(job);
+    const preparation=await prepareTask({taskId:job.taskId,jobId:job.id,prompt:job.prompt,signal:controller.signal});
+    controller.signal.throwIfAborted();
+    job.pipelineTrace=preparation.trace;job.preparationStatus='Recursos de Factory recibidos por el Harness.';
+    generationPrompt=job.prompt+'\n\nInstrucciones integradas por EM Core:\n'+(preparation.trace?.coreSummary||'')+'\n\nRecursos textuales preparados por EM Factory y entregados por EM Installer. Úsalos como requisitos y evidencia de diseño; conserva la procedencia y no los presentes como pruebas ejecutadas:\n'+preparation.resourceContext;
+    await save(job);
+   }
    for(let attempt=1;attempt<=2;attempt++){
     controller.signal.throwIfAborted();
     job.status='generating';job.attempt=attempt;await save(job);
-    const output=await infer(instructions('em-installer-5-3','Crea una aplicación estática autocontenida para el harness. Devuelve JSON con title, html completo y tests (hasta 12 pasos click/fill/visible con selectores CSS estables). HTML, CSS y JavaScript inline, sin recursos externos, fetch, formularios externos, importaciones, backend ni dependencias. Usa datos de ejemplo solo si se indican como tales. No afirmes que ya fue probado. Incluye pruebas de navegación y botones importantes. Respeta el alcance solicitado.'),
-      [{type:'input_text',text:job.prompt+(job.previousHtml?'\nDocumento existente que debes modificar conservando lo no solicitado:\n'+job.previousHtml:'')+feedback}],controller.signal,schema,{maxOutputTokens:12000});
+    const output=await infer(instructions('em-installer-5-3','Crea una aplicación estática autocontenida para el harness a partir de los requisitos del usuario y los recursos recibidos de EM Factory. Conserva la procedencia de esos recursos. Devuelve JSON con title, html completo y tests (hasta 12 pasos click/fill/visible con selectores CSS estables). HTML, CSS y JavaScript inline, sin recursos externos, fetch, formularios externos, importaciones, backend ni dependencias. Usa datos de ejemplo solo si se indican como tales. No afirmes que ya fue probado. Incluye pruebas de navegación y botones importantes. Respeta el alcance solicitado.'),
+      [{type:'input_text',text:generationPrompt+(job.previousHtml?'\nDocumento existente que debes modificar conservando lo no solicitado:\n'+job.previousHtml:'')+feedback}],controller.signal,schema,{maxOutputTokens:12000});
     const draft=JSON.parse(output.text);
     if(typeof draft.html!=='string'||!draft.html.toLowerCase().includes('</html>')||Buffer.byteLength(draft.html)>500000||!Array.isArray(draft.tests)||draft.tests.length>12)throw Error('El modelo no devolvió un documento completo dentro de los límites.');
     job.title=draft.title;job.html=draft.html;job.status='testing';await save(job);
@@ -59,11 +68,11 @@ export function createHarness({infer,instructions,readJson,json}){
     if(active){json(res,429,{error:'Hay una construcción en curso; espera a que termine.'});return true}
     active='reserving';
     let body;try{body=await readJson(req);if(typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>12000)throw Error('Describe la aplicación en hasta 12000 caracteres.')}catch(e){active=null;throw e}
-    const job={id:randomUUID(),prompt:body.prompt,title:'Aplicación',status:'generating',createdAt:new Date().toISOString(),versions:[],saved:false,taskId:typeof body.taskId==='string'?body.taskId.slice(0,128):null,messages:[{who:'Tú',text:body.prompt}]};
+    const job={id:randomUUID(),prompt:body.prompt,title:'Aplicación',status:'preparing',createdAt:new Date().toISOString(),versions:[],saved:false,taskId:typeof body.taskId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(body.taskId)?body.taskId:randomUUID(),messages:[{who:'Tú',text:body.prompt}]};
     const controller=new AbortController();const timer=setTimeout(()=>controller.abort(new DOMException('La construcción excedió seis minutos.','TimeoutError')),360000);
     active=job.id;controllers.set(job.id,controller);
     try{await save(job)}catch(e){active=null;controllers.delete(job.id);clearTimeout(timer);throw e}
-    json(res,202,{id:job.id,status:job.status});
+    json(res,202,{id:job.id,taskId:job.taskId,status:job.status});
     execute(job,controller).catch(console.error).finally(()=>clearTimeout(timer));return true;
    }
    if(match){

@@ -46,9 +46,9 @@ function status(text){$('status').textContent=text}
 async function poll(){
  if(polling||!id)return;polling=true;
  try{
-  const job=await api('jobs/'+id);status(({generating:'EM Installer está generando los archivos…',testing:'El navegador está probando la aplicación…',completed:'Aplicación lista. Pasaron las comprobaciones ejecutadas.',needs_revision:'La vista previa está disponible, pero algunas comprobaciones fallaron.',cancelled:'Trabajo detenido.',interrupted:'Trabajo interrumpido por reinicio.',failed:'Falló la construcción.'})[job.status]||job.status);
+  const job=await api('jobs/'+id);status(({preparing:'EM Core está coordinando EM Installer y EM Factory…',generating:'El Harness está generando la aplicación con los recursos recibidos…',testing:'El navegador está probando la aplicación…',completed:'Aplicación lista. Pasaron las comprobaciones ejecutadas.',needs_revision:'La vista previa está disponible, pero algunas comprobaciones fallaron.',cancelled:'Trabajo detenido.',interrupted:'Trabajo interrumpido por reinicio.',failed:'Falló la construcción.'})[job.status]||job.status);
   if(job.error)status($('status').textContent+' '+job.error);
-  const running=['generating','testing'].includes(job.status);$('build').disabled=running;$('stop').disabled=!running;
+  const running=['preparing','generating','testing'].includes(job.status);$('build').disabled=running;$('stop').disabled=!running;
   if(job.report){$('testReport').hidden=false;$('report').textContent=JSON.stringify(job.report,null,2)}$('welcome').hidden=true;
   if(!running){
    const data=await api('jobs/'+id+'/html');html=data.html;
