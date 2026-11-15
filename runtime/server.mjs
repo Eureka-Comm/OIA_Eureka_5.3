@@ -52,7 +52,7 @@ const factoryResourcesSchema = {
     type: "object", additionalProperties: false,
     required: ["name", "problem", "outcome", "stage", "resources", "missingCapabilities"],
     properties: {
-      name: { type: "string" }, problem: { type: "string" }, outcome: { type: "string" },
+      name: { type: "string", minLength: 1, maxLength: 48, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", description: "Identificador ASCII en minúsculas y kebab-case; sin espacios ni acentos." }, problem: { type: "string" }, outcome: { type: "string" },
       stage: { type: "string", enum: ["understand", "analyze", "decide", "act", "install", "learn"] },
       missingCapabilities: { type: "array", items: { type: "string" } },
       resources: { type: "array", items: {
@@ -70,6 +70,18 @@ const factoryResourcesSchema = {
     },
   } },
 };
+function normalizeFactoryWorkspaceName(value) {
+  const slug = String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\\u0300-\\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return slug || "eureka-resources";
+}
+
 const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), "skills");
 const dataFile = process.env.EUREKA_RUNTIME_DATA_FILE || join(dirname(fileURLToPath(import.meta.url)), "runtime-data.json");
 let writeQueue = Promise.resolve();
@@ -456,6 +468,13 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
       }
 
       const normalizedFields = [];
+      if (call.name === "factory_build_resources" && args.workspace && typeof args.workspace.name === "string") {
+        const normalizedName = normalizeFactoryWorkspaceName(args.workspace.name);
+        if (normalizedName !== args.workspace.name) {
+          args.workspace.name = normalizedName;
+          normalizedFields.push("workspace.name");
+        }
+      }
       if (call.name === "factory_build_resources" && Array.isArray(args.workspace?.resources)) {
         for (const resource of args.workspace.resources) {
           if (Array.isArray(resource?.evidence)) {
@@ -778,7 +797,7 @@ async function invokeCore(body, requestSignal = null) {
         });
       }
       try {
-        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Si llamas factory_build_resources, los argumentos deben ser un objeto JSON válido conforme al esquema: workspace con name, problem, outcome, stage, resources y missingCapabilities como lista de cadenas; cada resource usa path, kind, content, purpose, owner, acceptance como lista y evidence como cadena de texto. Usa stage=install. Si la herramienta rechaza argumentos, corrígelos y vuelve a intentarlo dentro de la misma secuencia. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
+        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Si llamas factory_build_resources, los argumentos deben ser un objeto JSON válido conforme al esquema: workspace con name, problem, outcome, stage, resources y missingCapabilities como lista de cadenas; name debe ser un identificador ASCII en minúsculas con guiones (kebab-case), sin espacios ni acentos; cada resource usa path, kind, content, purpose, owner, acceptance como lista y evidence como cadena de texto. Usa stage=install. Si la herramienta rechaza argumentos, corrígelos y vuelve a intentarlo dentro de la misma secuencia. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
         result = step.agent === "installer" && factoryConnection
           ? await inferInstallerWithFactory(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal, factoryConnection, taskId, invocationId)
           : await infer(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal);
