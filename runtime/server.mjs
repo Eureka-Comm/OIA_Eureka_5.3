@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 15087)
-Total output lines: 790
-
 import { createHarness } from "./harness.mjs";
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
@@ -328,7 +325,233 @@ async function infer(instructions, content, signal, outputSchema = null, options
   const url = process.env.MODEL_API_URL;
   if (!safeProviderUrl(url, process.env.MODEL_API_ALLOW_HTTP === "true")) throw Object.assign(new Error("MODEL_API_URL debe usar HTTPS, salvo host local configurado explícitamente para inferencia privada."), { status: 503 });
   const protocol = process.env.MODEL_API_PROTOCOL || "responses";
-  const providerHeaders = { "content-type"…5087 tokens truncated… solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración, construcción de aplicación o preparación de recursos que Factory pueda aportar. Si asignas una tarea pertinente a Installer, este runtime puede ofrecerle herramientas MCP verificadas de EM Factory; solo Installer las usará y reportará los resultados observados. No afirmes uso de Factory en la respuesta de routing. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. Usa dependencias solo cuando realmente necesites un resultado anterior; permite trabajar en paralelo a los agentes independientes. No fuerces un flujo fijo.`),
+  const providerHeaders = { "content-type": "application/json", accept: "application/json" };
+  if (process.env.MODEL_API_AUTH_MODE !== "none" && process.env.MODEL_API_KEY) providerHeaders.authorization = `Bearer ${process.env.MODEL_API_KEY}`;
+  // Send only fields allowed by each provider content-part schema. The web
+  // adapter also carries MIME metadata for auditing; Responses API rejects it
+  // when forwarded as an unknown input_file property.
+  const providerContent = content.map(part => {
+    if (part.type === "input_text") return { type: "input_text", text: part.text || "" };
+    if (part.type === "input_image") return { type: "input_image", image_url: part.image_url, detail: part.detail || "auto" };
+    if (part.type === "input_file") return { type: "input_file", filename: part.filename, file_data: part.file_data };
+    return null;
+  }).filter(Boolean);
+  const requestBody = protocol === "chat_completions"
+    ? { model: process.env.MODEL_NAME, messages: [...chatCompletionMessages(instructions, providerContent), ...(options.conversation || [])], max_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), stream: false }
+    : { model: process.env.MODEL_NAME, instructions, input: [{ role: "user", content: providerContent }, ...(options.conversation || [])], max_output_tokens: Number(options.maxOutputTokens || process.env.MODEL_MAX_OUTPUT_TOKENS || 3000), store: false };
+  if (Array.isArray(options.tools) && options.tools.length) {
+    requestBody.tools = protocol === "chat_completions"
+      ? options.tools.map(tool => ({ type: "function", function: { name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false } }))
+      : options.tools.map(tool => ({ type: "function", name: tool.name, description: tool.description || "", parameters: tool.inputSchema, strict: false }));
+    requestBody.tool_choice = "auto";
+  }
+  if (outputSchema && new URL(url).hostname === "api.openai.com") {
+    requestBody[protocol === "chat_completions" ? "response_format" : "text"] = protocol === "chat_completions"
+      ? { type: "json_schema", json_schema: { name: "eureka_core_routing", strict: true, schema: outputSchema } }
+      : { format: { type: "json_schema", name: "eureka_core_routing", strict: true, schema: outputSchema } };
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers: providerHeaders,
+    body: JSON.stringify(requestBody),
+    signal,
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload) {
+    const providerMessage = typeof payload?.error?.message === "string" ? payload.error.message.trim().slice(0, 500) : "";
+    const providerCode = typeof payload?.error?.code === "string" ? payload.error.code.slice(0, 100) : "";
+    const detail = [providerCode, providerMessage].filter(Boolean).join(": ");
+    throw Object.assign(new Error(`El proveedor de inferencia no completó la solicitud (HTTP ${response.status})${detail ? `: ${detail}` : ""}.`), { status: 502 });
+  }
+  const text = protocol === "chat_completions" ? chatCompletionText(payload) : responseText(payload);
+  const toolCalls = protocol === "chat_completions"
+    ? (payload.choices?.[0]?.message?.tool_calls || []).map(call => ({ id: call.id, name: call.function?.name, arguments: call.function?.arguments, raw: call }))
+    : (payload.output || []).filter(item => item.type === "function_call").map(call => ({ id: call.call_id || call.id, name: call.name, arguments: call.arguments, raw: call }));
+  if (!text && !toolCalls.length) throw Object.assign(new Error("El proveedor de inferencia devolvió una respuesta vacía."), { status: 502 });
+  return { text, toolCalls, providerResponseId: typeof payload.id === "string" ? payload.id : null };
+}
+
+async function inferInstallerWithFactory(instructions, content, signal, connection, taskId, invocationId) {
+  if (!connection) return infer(instructions, content, signal);
+  const tools = connection.tools.filter(tool => FACTORY_TOOLS.includes(tool.name) && tool.name !== "factory_build_plugin");
+  if (!tools.length) return infer(instructions + "\n\nEM Factory no anunció herramientas permitidas para esta tarea. No afirmes que se generaron recursos.", content, signal);
+
+  const conversation = [];
+  const factoryToolCalls = [];
+  const providerResponseIds = [];
+  const protocol = process.env.MODEL_API_PROTOCOL || "responses";
+  for (let turn = 0; turn < 5; turn++) {
+    const result = await infer(instructions, content, signal, null, { tools, conversation });
+    if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
+    if (!result.toolCalls?.length) return { ...result, providerResponseIds, factoryToolCalls };
+    if (turn === 4) throw Object.assign(new Error("EM Installer alcanzó el límite de rondas de herramientas de Factory."), { status: 502 });
+
+    if (protocol === "chat_completions") conversation.push({ role: "assistant", content: result.text || null, tool_calls: result.toolCalls.map(call => call.raw) });
+    else for (const call of result.toolCalls) conversation.push(call.raw);
+
+    for (const call of result.toolCalls) {
+      const definition = tools.find(tool => tool.name === call.name);
+      if (!definition) throw Object.assign(new Error("El proveedor solicitó una herramienta Factory fuera de la lista permitida."), { status: 403 });
+      let args;
+      try { args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : call.arguments; }
+      catch { throw Object.assign(new Error(`EM Installer produjo argumentos JSON inválidos para ${call.name}.`), { status: 502 }); }
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw Object.assign(new Error(`Los argumentos de ${call.name} deben ser un objeto JSON.`), { status: 502 });
+
+      const record = { id: crypto.randomUUID(), name: call.name, status: "running", startedAt: new Date().toISOString() };
+      factoryToolCalls.push(record);
+      await mutateTask(taskId, current => {
+        const invocation = current.agentInvocations.find(item => item.id === invocationId);
+        if (invocation) { invocation.factoryToolCalls ||= []; invocation.factoryToolCalls.push(record); }
+        appendTaskEvent(current, "FactoryToolInvoked", { actor: "EM Installer", tool: call.name, payload: { invocationId, factoryInvocationId: record.id, status: "running" } });
+      });
+      let toolResult;
+      try { toolResult = await connection.client.callTool({ name: call.name, arguments: args }, { signal: connection.signal, toolDefinition: definition }); }
+      catch (error) {
+        record.status = "failed";
+        record.completedAt = new Date().toISOString();
+        record.failureNote = String(error?.message || error).slice(0, 400);
+        await mutateTask(taskId, current => appendTaskEvent(current, "FactoryToolFailed", { actor: "EM Installer", tool: call.name, reason: record.failureNote, payload: { invocationId, factoryInvocationId: record.id, status: "failed" } }));
+        throw Object.assign(new Error(`EM Factory no completó ${call.name}: ${record.failureNote}`), { status: 502 });
+      }
+      const serialized = JSON.stringify(toolResult).slice(0, 72000);
+      record.status = toolResult?.isError ? "failed" : "completed";
+      record.completedAt = new Date().toISOString();
+      if (toolResult?.isError) record.failureNote = "EM Factory informó un error de herramienta.";
+      await mutateTask(taskId, current => appendTaskEvent(current, toolResult?.isError ? "FactoryToolFailed" : "FactoryToolCompleted", {
+        actor: "EM Installer", tool: call.name,
+        payload: { invocationId, factoryInvocationId: record.id, status: record.status, resultDigest: createHash("sha256").update(serialized).digest("hex") },
+      }));
+      if (protocol === "chat_completions") conversation.push({ role: "tool", tool_call_id: call.id, content: serialized });
+      else conversation.push({ type: "function_call_output", call_id: call.id, output: serialized });
+    }
+  }
+  throw Object.assign(new Error("EM Installer no completó la secuencia de herramientas Factory."), { status: 502 });
+}
+
+function parsePlan(text) {
+  const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  let plan;
+  try { plan = JSON.parse(normalized); }
+  catch { throw Object.assign(new Error("EM Core no devolvió un plan de routing válido."), { status: 502 }); }
+  if (!["direct", "delegate"].includes(plan.mode) || typeof plan.reason !== "string" || !plan.reason.trim()) {
+    throw Object.assign(new Error("EM Core debe devolver modo y motivo de routing válidos."), { status: 502 });
+  }
+  if (plan.mode === "direct") {
+    if (typeof plan.response !== "string" || !plan.response.trim() || (plan.steps || []).length) throw Object.assign(new Error("La respuesta directa de EM Core debe contener response y no incluir steps."), { status: 502 });
+    return { mode: "direct", steps: [], response: plan.response.trim(), reason: plan.reason.trim().slice(0, 1200) };
+  }
+  if (!Array.isArray(plan.steps) || !plan.steps.length || plan.steps.length > specialistIds.length) throw Object.assign(new Error("El routing de Core debe incluir una lista válida de tareas especialistas."), { status: 502 });
+  const steps = plan.steps.map((step, index) => {
+    const dependencies = Array.isArray(step.dependsOn) ? step.dependsOn : [];
+    if (!specialistIds.includes(step.agent) || typeof step.task !== "string" || !step.task.trim() || step.task.length > 12000 || dependencies.some(dep => !Number.isInteger(dep) || dep < 0 || dep >= index)) throw Object.assign(new Error("EM Core devolvió una tarea inválida, un rol no permitido o dependencias no válidas."), { status: 502 });
+    return { agent: step.agent, task: step.task.trim(), dependsOn: [...new Set(dependencies)] };
+  });
+  return { mode: "delegate", steps, reason: plan.reason.trim().slice(0, 1200) };
+}
+
+function contentForModel(input, task) {
+  const parts = Array.isArray(input) ? input.filter(item => item && ["input_text", "input_image", "input_file"].includes(item.type)) : [];
+  if (!parts.some(item => item.type === "input_text")) parts.unshift({ type: "input_text", text: task });
+  if (parts.length > 65) throw Object.assign(new Error("La solicitud contiene demasiadas partes de entrada."), { status: 400 });
+  return parts;
+}
+
+async function recordFeedback(taskId, body) {
+  if (!taskIdPattern.test(taskId)) throw Object.assign(new Error("Identificador de tarea no válido."), { status: 400 });
+  if (!Number.isInteger(body.messageIndex) || body.messageIndex < 0 || !["positive", "negative", "comment"].includes(body.rating) || typeof body.comment !== "string" || body.comment.length > 2000) throw Object.assign(new Error("La valoración o el comentario no son válidos."), { status: 400 });
+  const feedback = await mutateTask(taskId, current => {
+    if (!current.messages?.[body.messageIndex] || current.messages[body.messageIndex].role !== "assistant") throw Object.assign(new Error("No se encontró la respuesta de Eureka asociada."), { status: 404 });
+    current.feedback ||= [];
+    const item = { id: crypto.randomUUID(), messageIndex: body.messageIndex, rating: body.rating, comment: body.comment.trim(), submittedAt: new Date().toISOString() };
+    current.feedback.push(item);
+    appendTaskEvent(current, "ResponseFeedbackSubmitted", { actor: "Eureka-0", payload: item });
+    return item;
+  });
+  if (!feedback) throw Object.assign(new Error("No se encontró la conversación."), { status: 404 });
+  return feedback;
+}
+
+async function invokeSpecialist(body, requestSignal = null) {
+  if (!providerConfigured()) throw Object.assign(new Error("El runtime API está instalado, pero falta configurar un proveedor de inferencia."), { status: 503 });
+  const agent = typeof body.agent === "string" ? body.agent : "";
+  const role = roles[agent];
+  if (!role || agent === "core") throw Object.assign(new Error("Agente especialista no válido."), { status: 400 });
+  if (!systemSkill || !skills[role.skill]) throw Object.assign(new Error("Falta la Skill versionada de " + role.name + "."), { status: 503 });
+  const task = typeof body.task === "string" ? body.task.trim() : "";
+  if (!task || task.length > 12000) throw Object.assign(new Error("El campo task es obligatorio y admite hasta 12 000 caracteres."), { status: 400 });
+  const taskId = typeof body.taskId === "string" && taskIdPattern.test(body.taskId) ? body.taskId : crypto.randomUUID();
+  const previousTask = await getTask(taskId);
+  const content = contentForModel(body.input, task);
+  if (previousTask && previousTask.intent) content.unshift({ type: "input_text", text: "Intención inicial de Eureka-0 para esta tarea:\n" + previousTask.intent });
+  if (previousTask && previousTask.messages && previousTask.messages.length) {
+    const history = previousTask.messages.slice(-24).map(message => (message.role === "user" ? "Eureka-0" : "Eureka") + ": " + message.text).join("\n\n");
+    content.unshift({ type: "input_text", text: "Historial de esta tarea; consérvalo como contexto:\n" + history });
+  }
+  const invocationId = typeof body.invocationId === "string" ? body.invocationId : crypto.randomUUID();
+  await updateStore(state => {
+    const now = new Date().toISOString();
+    const current = ensureTaskState(state.tasks[taskId] || { id: taskId, intent: "", createdAt: now, updatedAt: now, status: "intake", interactionState: "Dialogue/Explore", messages: [], events: [] });
+    if (!current.events.length) appendTaskEvent(current, "TaskCreated", { actor: "system" });
+    current.messages.push({ role: "user", text: task, at: now });
+    const invocation = { id: invocationId, taskId, agent: role.name, requestedBy: "Eureka-0", reason: "Agente seleccionado directamente en el chat.", executionMode: "direct", status: "running", provider: "eureka-runtime", inputRefs: [], formulationVersion: current.currentFormulationVersion || null, requestedAt: now, startedAt: now, capabilityVersion: "5.3.2" };
+    current.agentInvocations.push(invocation);
+    appendTaskEvent(current, "MessageReceived", { actor: "Eureka-0", text: task, attachments: Array.isArray(body.input) ? body.input.filter(part => part.type === "input_file" || part.type === "input_image").map(part => ({ type: part.type, filename: part.filename, media_type: part.media_type })) : [] });
+    appendTaskEvent(current, "AgentInvoked", { actor: "Eureka-0", agent: role.name, reason: invocation.reason, payload: { invocationId, agent, status: "running" } });
+    current.interactionState = "Solve/Coordinate";
+    state.tasks[taskId] = current;
+  });
+  const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
+  const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
+  try {
+    const result = await infer(instructionsFor(role.skill, "Responde desde la responsabilidad de " + role.name + " definida por su Skill completa. Esta es una invocación directa solicitada por Eureka-0; no simules routing de Core, especialistas adicionales, MCP, cálculos ni acciones que no se hayan ejecutado. Explicita límites y evidencia cuando corresponda."), content, inferenceSignal);
+    await mutateTask(taskId, current => {
+      ensureTaskState(current);
+      current.messages.push({ role: "assistant", text: result.text, at: new Date().toISOString() });
+      current.interactionState = "Dialogue/Explore";
+      const invocation = current.agentInvocations.find(item => item.id === invocationId);
+      if (invocation) { invocation.status = "completed"; invocation.completedAt = new Date().toISOString(); invocation.modelOrToolVersion = process.env.MODEL_NAME || "configured-provider"; }
+      appendTaskEvent(current, "AgentCompleted", { actor: role.name, agent: role.name, payload: { invocationId, agent, status: "completed", providerResponseId: result.providerResponseId }, text: result.text });
+    });
+    return { invocationId, taskId, agent, status: "completed", product: { text: result.text }, text: result.text, routedAgents: [], routingReason: "Agente seleccionado directamente por Eureka-0.", trace: { taskId, formulationVersion: body.formulationVersion ?? null, skillVersion: "5.3.2", specialistInstructionDigests: { [agent]: skills[role.skill].digest }, systemInstructionDigest: systemSkill.digest, providerResponseIds: [result.providerResponseId].filter(Boolean), persistence: "json-event-store" } };
+  } catch (error) {
+    await mutateTask(taskId, current => {
+      ensureTaskState(current);
+      const invocation = current.agentInvocations.find(item => item.id === invocationId);
+      if (invocation) { invocation.status = "failed"; invocation.completedAt = new Date().toISOString(); invocation.failureNote = String(error.message || error).slice(0, 500); }
+      appendTaskEvent(current, "AgentFailed", { actor: role.name, agent: role.name, reason: String(error.message || error).slice(0, 500), payload: { invocationId, agent, status: "failed" } });
+      current.interactionState = "Dialogue/Explore";
+    });
+    throw error;
+  }
+}
+
+async function invokeCore(body, requestSignal = null) {
+  if (!providerConfigured()) throw Object.assign(new Error("El runtime API está instalado, pero falta configurar un proveedor de inferencia."), { status: 503 });
+  if (!systemSkill || !skills[roles.core.skill]) throw Object.assign(new Error("Falta el paquete de instrucciones de Eureka Multiverse 5.3 en el runtime."), { status: 503 });
+  const task = typeof body.task === "string" ? body.task.trim() : "";
+  if (!task || task.length > 12000) throw Object.assign(new Error("El campo task es obligatorio y admite hasta 12 000 caracteres."), { status: 400 });
+  const taskId = typeof body.taskId === "string" && taskIdPattern.test(body.taskId) ? body.taskId : crypto.randomUUID();
+  const previousTask = await getTask(taskId);
+  const previousMessages = previousTask?.messages || [];
+  const content = contentForModel(body.input, task);
+  if (previousTask?.intent) content.unshift({ type: "input_text", text: `Intención inicial de Eureka-0 para esta tarea:\n${previousTask.intent}` });
+  if (previousMessages.length) {
+    const history = previousMessages.slice(-24).map(message => `${message.role === "user" ? "Eureka-0" : "Eureka"}: ${message.text}`).join("\n\n");
+    content.unshift({ type: "input_text", text: `Historial de esta tarea; consérvalo como contexto y corrige cualquier interpretación previa cuando nueva evidencia lo requiera:\n${history}` });
+  }
+  await updateStore(state => {
+    const now = new Date().toISOString();
+    const current = ensureTaskState(state.tasks[taskId] || { id: taskId, intent: "", createdAt: now, updatedAt: now, status: "intake", interactionState: "Dialogue/Explore", messages: [], events: [] });
+    if (!current.events.length) appendTaskEvent(current, "TaskCreated", { actor: "system" });
+    current.messages.push({ role: "user", text: task, at: now });
+    appendTaskEvent(current, "MessageReceived", { actor: "system", text: task, attachments: Array.isArray(body.input) ? body.input.filter(part => part.type === "input_file" || part.type === "input_image").map(part => ({ type: part.type, filename: part.filename, media_type: part.media_type })) : [] });
+    current.interactionState = "Understand/Frame";
+    state.tasks[taskId] = current;
+  });
+  const timeout = AbortSignal.timeout(Number(process.env.MODEL_TIMEOUT_MS || 120000));
+  const inferenceSignal = requestSignal ? AbortSignal.any([timeout, requestSignal]) : timeout;
+  const planResult = await infer(
+    instructionsFor(roles.core.skill, `Opera la solicitud entrante bajo las reglas de las Skills completas incluidas arriba. Durante el routing, EM Core no llama herramientas directamente ni afirma que lo hizo. Devuelve siempre un único objeto JSON con mode, reason, response y steps. Si respondes directamente, usa mode="direct", response con la respuesta de Core y steps=[]; si delegas, usa mode="delegate", response="" y steps con subtareas concretas. Cada step debe tener agent, task y dependsOn; agent debe ser uno de estos IDs exactos: ${specialistIds.join(", ")}. dependsOn debe contener solo índices de pasos anteriores y ser [] cuando no haya dependencias. Responde directamente con mode="direct" solo a preguntas sencillas, factuales o explicativas que no soliciten evaluación, comparación, recomendación, diseño, plan de solución ni análisis de un problema sustantivo. Para esas solicitudes, delega por defecto en los especialistas pertinentes y devuelve una síntesis integrada de Core. Para una pregunta de análisis estratégico, comparación o recomendación sobre la ventaja del motor matemático, trata la solicitud como una pregunta que debes responder, no como autorización para implementarla. Delega en Descriptor para verificar capacidades y evidencia actuales, Predictor para evaluar escenarios y condiciones que cambiarían el resultado, y Prescriptor para generar varias opciones, compararlas y recomendar cómo comprobarlas; Core debe integrar y mostrar una respuesta final clara en el chat. No invoques Installer salvo que Eureka-0 pida explícitamente un diseño concreto de integración, construcción de aplicación o preparación de recursos que Factory pueda aportar. Si asignas una tarea pertinente a Installer, este runtime puede ofrecerle herramientas MCP verificadas de EM Factory; solo Installer las usará y reportará los resultados observados. No afirmes uso de Factory en la respuesta de routing. No invoques Structurer ni abras una formulación con gate de revisión para una pregunta consultiva, salvo que una ambigüedad material impida responder. Nunca dejes que una revisión formal pendiente sustituya o bloquee la respuesta conversacional. Cada agente debe aportar una contribución identificable: no los convoques a todos automáticamente. Actioner requiere una acción autorizada y Publisher se reserva para productos de comunicación solicitados. Una formulación de Structurer organiza el problema, pero no sustituye el análisis ni cierra la tarea. Usa dependencias solo cuando realmente necesites un resultado anterior; permite trabajar en paralelo a los agentes independientes. No fuerces un flujo fijo.`),
     content,
     inferenceSignal,
     corePlanSchema,
@@ -563,5 +786,4 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(port, "0.0.0.0", () => console.log(`Eureka Runtime API escuchando en puerto ${port}`));
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => server.close(() => process.exit(0)));
-
 
