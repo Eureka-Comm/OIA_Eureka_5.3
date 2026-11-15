@@ -41,7 +41,7 @@ const $=id=>document.getElementById(id);let id=localStorage.getItem('eureka-harn
 async function appHistory(){try{const {jobs}=await api('jobs');$('appList').innerHTML=jobs.map(j=>'<div class="appRow"><button data-app="'+j.id+'">'+(j.pinned?'◆ ':'')+j.title+'</button><button title="Fijar o desfijar" data-pin="'+j.id+'">'+(j.pinned?'◆':'◇')+'</button><button title="Renombrar" data-rename="'+j.id+'">···</button><button title="Eliminar" data-delete="'+j.id+'">×</button></div>').join('')}catch{}}
 $('appSearch').addEventListener('input',()=>{const q=$('appSearch').value.trim().toLocaleLowerCase();for(const row of $('appList').querySelectorAll('.appRow'))row.hidden=!row.textContent.toLocaleLowerCase().includes(q)});
 $('newApp').onclick=()=>{location.href='/?mode=factory';return;id='';localStorage.removeItem('eureka-harness-job');$('preview').hidden=true;$('report').open=false;$('testReport').hidden=true;$('welcome').hidden=false;$('prompt').value='';status('Describe la aplicación que quieres crear.');};
-async function api(path,options={}){const r=await fetch('/api/harness/'+path,{...options,headers:{'content-type':'application/json'},cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}
+async function api(path,options={}){const r=await fetch('/api/harness/'+path,{...options,headers:{'content-type':'application/json'},cache:'no-store'});const raw=await r.text();let data={};if(raw){try{data=JSON.parse(raw)}catch{const detail=raw.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,220);throw Error('El servidor respondió HTTP '+r.status+' con contenido no JSON'+(detail?': '+detail:''))}}if(!r.ok)throw Error(data.error||('HTTP '+r.status));return data}
 function status(text){$('status').textContent=text}
 async function poll(){
  if(polling||!id)return;polling=true;
@@ -80,6 +80,7 @@ export async function harnessPage(request){
   const body=request.method==='POST'?await request.text():undefined;
   if(body&&body.length>16000)return reply({error:'Solicitud demasiado grande'},413);
   const r=await fetch(target,{method:request.method,headers:{authorization:'Bearer '+process.env.EUREKA_RUNTIME_API_TOKEN,'content-type':'application/json'},body,signal:AbortSignal.timeout(10000)});
-  return reply(await r.json(),r.status);
+  const raw=await r.text();let data;try{data=JSON.parse(raw)}catch{const detail=raw.replace(/<[^>]*>/g,' ').replace(/\\s+/g,' ').trim().slice(0,220);return reply({error:'El runtime respondió HTTP '+r.status+' con contenido no JSON'+(detail?': '+detail:'')},502)}
+  return reply(data,r.status);
  }catch{return reply({error:'No se pudo contactar al harness. El trabajo puede seguir activo; recarga para consultar su estado.'},502)}
 }
