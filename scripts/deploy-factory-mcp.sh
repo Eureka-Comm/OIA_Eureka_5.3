@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Deploy the pinned EM Factory MCP bridge without exposing or replacing .env.
+# Deploy the pinned private EM Factory service API adapter without exposing or replacing .env.
 if [ "$(id -u)" -ne 0 ]; then
   echo "Ejecuta este script como root en el VPS."
   exit 1
 fi
 
 APP_DIR=/opt/eureka-chat
-REV=555cc702e69c9445aeea48aea6d04986aad72aec
+REV=a39bedc80c665ebdc5d741a842f2093d1fa14933
 STAMP=$(date +%Y%m%d-%H%M%S)
 RELEASE="$APP_DIR/releases/factory-$STAMP"
 SOURCE="$RELEASE/source"
@@ -75,3 +75,4 @@ done
 
 echo "Health check falló: APP=$APP_HEALTH RUNTIME=$RUNTIME_HEALTH"
 false
+
