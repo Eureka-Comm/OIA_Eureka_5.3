@@ -156,10 +156,8 @@ Abre `https://<IP-publica-del-Droplet>` e inicia sesión con el usuario y contra
 - `MODEL_API_URL`, `MODEL_API_PROTOCOL`, `MODEL_API_KEY`, `MODEL_NAME`: endpoint, protocolo, credencial y modelo del proveedor. Para Ollama se puede omitir la clave con `MODEL_API_AUTH_MODE=none`.
 - `EUREKA_RUNTIME_API_TOKEN`: secreto interno compartido únicamente por la interfaz y el runtime dentro de Docker.
 - El contrato HTTP de la interfaz está documentado en [`runtime/openapi.yaml`](runtime/openapi.yaml); el detalle del event store y del paquete de Skills está en [`runtime/README.md`](runtime/README.md).
-- `EM_FACTORY_MCP_URL`: endpoint MCP del puente web de EM Factory.
-- `EM_FACTORY_AUTH_MODE=sites_bypass`, `EM_FACTORY_SITES_BYPASS_TOKEN`, `EM_FACTORY_SERVICE_TOKEN`: autenticación servidor a servidor del puente Sites. Los dos tokens se guardan solo en el `.env` privado del runtime; no en Git, la interfaz ni el navegador.
-- `EM_FACTORY_MCP_TOKEN`: alternativa para modo `bearer` cuando el servidor MCP use un token Bearer único.
-- `EM_FACTORY_MCP_ALLOW_HTTP`: se mantiene desactivado para producción; HTTP solo se acepta para un servicio interno local declarado explícitamente.
+- `EM_FACTORY_SERVICE_API_URL`: endpoint HTTPS REST de servicio a servicio del Site de EM Factory (`/api/eureka/factory`).
+- `EM_FACTORY_SITES_BYPASS_TOKEN` y `EM_FACTORY_SERVICE_TOKEN`: acceso privado Site + Bearer compartido. Se guardan solo en el `.env` privado del runtime; no en Git, la interfaz ni el navegador.
 - `MATH_ENGINE_URL`: reservado para el motor matemático; aún no implementado.
 - `EUREKA_DATA_DIR`: persistencia local para tareas y artefactos; el runtime comparte el volumen `/app/data` y guarda su event store en `runtime.json`.
 
@@ -168,3 +166,4 @@ No pegues secretos en el navegador, el repositorio ni mensajes de chat. `/api/st
 ## Validación local
 
 Antes de subir cambios, ejecuta `npm run build`. Este comando empaqueta los módulos del worker e importa el resultado para confirmar que el artefacto se puede cargar. La inferencia requiere validación con credenciales de prueba, que no se guardan en el repositorio.
+
