@@ -382,6 +382,10 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
   const factoryArtifacts = [];
   const providerResponseIds = [];
   const protocol = process.env.MODEL_API_PROTOCOL || "responses";
+  const pushToolOutput = (call, output) => {
+    if (protocol === "chat_completions") conversation.push({ role: "tool", tool_call_id: call.id, content: output });
+    else conversation.push({ type: "function_call_output", call_id: call.id, output });
+  };
   for (let turn = 0; turn < 5; turn++) {
     const result = await infer(instructions, content, signal, null, { tools, conversation });
     if (result.providerResponseId) providerResponseIds.push(result.providerResponseId);
@@ -395,9 +399,36 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
       const definition = tools.find(tool => tool.name === call.name);
       if (!definition) throw Object.assign(new Error("El proveedor solicitó una herramienta Factory fuera de la lista permitida."), { status: 403 });
       let args;
+      let argumentFailure = "";
       try { args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : call.arguments; }
-      catch { throw Object.assign(new Error(`EM Installer produjo argumentos JSON inválidos para ${call.name}.`), { status: 502 }); }
-      if (!args || typeof args !== "object" || Array.isArray(args)) throw Object.assign(new Error(`Los argumentos de ${call.name} deben ser un objeto JSON.`), { status: 502 });
+      catch { argumentFailure = "Los argumentos no forman JSON válido."; }
+      if (!argumentFailure && (!args || typeof args !== "object" || Array.isArray(args))) argumentFailure = "Los argumentos deben ser un objeto JSON.";
+      if (argumentFailure) {
+        const rawArguments = typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments ?? null);
+        const record = {
+          id: crypto.randomUUID(),
+          name: call.name,
+          status: "failed",
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          failureNote: argumentFailure,
+          argumentBytes: Buffer.byteLength(rawArguments || "", "utf8"),
+          argumentDigest: createHash("sha256").update(rawArguments || "").digest("hex"),
+        };
+        factoryToolCalls.push(record);
+        await mutateTask(taskId, current => {
+          const invocation = current.agentInvocations.find(item => item.id === invocationId);
+          if (invocation) { invocation.factoryToolCalls ||= []; invocation.factoryToolCalls.push(record); }
+          appendTaskEvent(current, "FactoryToolArgumentsRejected", {
+            actor: "EM Installer",
+            tool: call.name,
+            reason: argumentFailure,
+            payload: { invocationId, factoryInvocationId: record.id, argumentBytes: record.argumentBytes, argumentDigest: record.argumentDigest },
+          });
+        });
+        pushToolOutput(call, JSON.stringify({ error: argumentFailure, guidance: "Reintenta con argumentos JSON válidos que respeten el esquema de la herramienta; factory_build_resources requiere { workspace: { name, problem, outcome, stage } } y stage debe ser install." }));
+        continue;
+      }
 
       const record = { id: crypto.randomUUID(), name: call.name, status: "running", startedAt: new Date().toISOString() };
       factoryToolCalls.push(record);
@@ -483,8 +514,7 @@ async function inferInstallerWithFactory(instructions, content, signal, connecti
         actor: "EM Installer", tool: call.name,
         payload: { invocationId, factoryInvocationId: record.id, status: record.status, resultDigest: createHash("sha256").update(serialized).digest("hex"), resourceArtifactId: record.resourceArtifactId || undefined, handoffStatus: record.handoffStatus || undefined },
       }));
-      if (protocol === "chat_completions") conversation.push({ role: "tool", tool_call_id: call.id, content: serialized });
-      else conversation.push({ type: "function_call_output", call_id: call.id, output: serialized });
+      pushToolOutput(call, serialized);
     }
   }
   throw Object.assign(new Error("EM Installer no completó la secuencia de herramientas Factory."), { status: 502 });
@@ -703,7 +733,7 @@ async function invokeCore(body, requestSignal = null) {
         });
       }
       try {
-        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
+        const adapterInstructions = `Ejecuta únicamente la responsabilidad de ${role.name} definida por su Skill completa. Respeta autoridad de Eureka-0, gates, incertidumbre y límites de herramientas. ${step.agent === "installer" ? (factoryConnection ? "EM Factory MCP está conectado y sus herramientas permitidas están disponibles para preparar recursos cuando sean útiles. No las invoques por defecto. Si llamas factory_build_resources, los argumentos deben ser un objeto JSON válido con la forma { workspace: { name, problem, outcome, stage } }; usa stage=install y agrega recursos solo cuando puedas proporcionar su contenido y procedencia. Si la herramienta rechaza argumentos, corrígelos y vuelve a intentarlo dentro de la misma secuencia. Registra qué herramienta se ejecutó y qué produjo; los resultados no demuestran que una aplicación se ejecutó, probó o desplegó." : `EM Factory MCP no está disponible para esta tarea (${factoryConnectionFailure || "sin conexión verificada"}). No digas que se utilizó; explica el bloqueo y ofrece una alternativa de preparación.`) : "No se proporcionan herramientas externas a este especialista."} No simules resultados de herramientas ni ejecuciones. Entrega una contribución interna concisa: hallazgos, evidencia, incertidumbres y recomendación; evita repetir la pregunta, el historial y las instrucciones. Apunta a 250 palabras salvo que la subtarea requiera más detalle para mantener rigor. Core redactará la respuesta final.`;
         result = step.agent === "installer" && factoryConnection
           ? await inferInstallerWithFactory(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal, factoryConnection, taskId, invocationId)
           : await infer(instructionsFor(role.skill, adapterInstructions), taskContent, inferenceSignal);
