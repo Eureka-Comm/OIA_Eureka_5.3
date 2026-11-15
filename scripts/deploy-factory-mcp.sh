@@ -22,12 +22,19 @@ test -s compose.existing-caddy.yaml || { echo "Falta compose.existing-caddy.yaml
 test -s compose.harness.yaml || { echo "Falta compose.harness.yaml; no se modificó el despliegue."; exit 1; }
 
 mkdir -p "$SOURCE" "$BACKUP"
+MISSING_BEFORE="$RELEASE/missing-before.txt"
+: > "$MISSING_BEFORE"
 curl -fsSL "$BASE_URL" | tar -xz --strip-components=1 -C "$SOURCE"
 
 for file in "${FILES[@]}"; do
   test -s "$SOURCE/$file" || { echo "Paquete incompleto: falta $file."; exit 1; }
-  mkdir -p "$BACKUP/$(dirname "$file")" "$(dirname "$file")"
-  cp -a "$file" "$BACKUP/$file"
+  mkdir -p "$(dirname "$file")"
+  if [ -e "$file" ]; then
+    mkdir -p "$BACKUP/$(dirname "$file")"
+    cp -a "$file" "$BACKUP/$file"
+  else
+    printf '%s\n' "$file" >> "$MISSING_BEFORE"
+  fi
 done
 
 COMPOSE=(docker compose --env-file "$APP_DIR/.env" --project-directory "$APP_DIR" -p eureka-chat -f compose.yaml -f compose.existing-caddy.yaml -f compose.harness.yaml)
@@ -38,7 +45,9 @@ docker image tag "$OLD_APP" "eureka-chat-app:rollback-$STAMP"
 
 restore() {
   echo "Falló el despliegue; restaurando archivos e imágenes anteriores..."
-  for file in "${FILES[@]}"; do cp -a "$BACKUP/$file" "$APP_DIR/$file"; done
+  for file in "${FILES[@]}"; do
+    if grep -Fxq "$file" "$MISSING_BEFORE"; then rm -f "$APP_DIR/$file"; else cp -a "$BACKUP/$file" "$APP_DIR/$file"; fi
+  done
   docker image tag "eureka-chat-runtime:rollback-$STAMP" eureka-chat-runtime:latest || true
   docker image tag "eureka-chat-app:rollback-$STAMP" eureka-chat-app:latest || true
   "${COMPOSE[@]}" up -d --no-deps --no-build runtime app || true
